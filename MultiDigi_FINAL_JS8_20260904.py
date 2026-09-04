@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.3.14"
+PROGRAM_VERSION_TAG = "8.4.0"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -70,7 +70,7 @@ if '--no-splash' not in sys.argv:
         _sx = (_splash_root.winfo_screenwidth() - _sw) // 2
         _sy = (_splash_root.winfo_screenheight() - _sh) // 2
         _splash_root.geometry(f'{_sw}x{_sh}+{_sx}+{_sy}')
-        _tk.Label(_splash_root, text='〰️ MultiDigi V2.1.9 CW isolé',
+        _tk.Label(_splash_root, text=f'〰️ MultiDigi V{PROGRAM_VERSION_TAG}',
                   bg='#05070c', fg='#ff44aa',
                   font=('Courier New', 18, 'bold')).pack(pady=(24, 4))
         _tk.Label(_splash_root, text='F4LPS — developpement@lesf4.fr',
@@ -28887,7 +28887,7 @@ class PSKMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("〰️ MultiDigi V8.3.11 — F4LPS")
+        self.setWindowTitle(f"〰️ MultiDigi V{PROGRAM_VERSION_TAG} — F4LPS")
         self.setMinimumSize(900, 600)
         self.setGeometry(100, 50, 1280, 800)
         self._ui_theme = UI_THEME_DEFAULT
@@ -29671,7 +29671,7 @@ class PSKMainWindow(QMainWindow):
         lay.setSpacing(6)
 
         # Titre
-        title = QLabel("〰️  MULTIDIGI V8.3.11")
+        title = QLabel(f"〰️  MULTIDIGI V{PROGRAM_VERSION_TAG}")
         title.setStyleSheet(
             "color:#ff44aa;font-size:12pt;font-weight:bold;font-family:'Courier New';"
         )
@@ -31553,10 +31553,10 @@ class PSKMainWindow(QMainWindow):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(20,20,20,20)
         about = QTextEdit(); about.setReadOnly(True)
         about.setStyleSheet("QTextEdit{background:#04020a;color:#ccaacc;border:none;font-family:'Courier New';font-size:9pt;}")
-        about.setHtml("""
+        about.setHtml(f"""
 <pre style='color:#ff44aa;font-size:14pt;font-weight:bold;'>
 ╔══════════════════════════════════════════╗
-║      MULTIDIGI V8.3.11                  ║
+║      MULTIDIGI V{PROGRAM_VERSION_TAG:<26}║
 ║      F4LPS — developpement@lesf4.fr     ║
 ╚══════════════════════════════════════════╝
 </pre>
@@ -39210,7 +39210,7 @@ class PSKMainWindow(QMainWindow):
                 tip += f" — Locator : {locator}"
             self.station_call_lbl.setToolTip(tip)
         try:
-            self.setWindowTitle(f"〰️ MultiDigi V2.1.2 — {call}")
+            self.setWindowTitle(f"〰️ MultiDigi V{PROGRAM_VERSION_TAG} — {call}")
         except Exception:
             pass
 
