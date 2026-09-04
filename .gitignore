@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Réglages locaux — contiennent des identifiants (HamQTH, QRZ, eQSL...)
+# et des chemins spécifiques à la machine. Ne jamais les publier.
+reglages*.json
+settings*.json
+*_settings.json
+*_audio_devices.json
+*.log
+
+# Traces de diagnostic générées localement par le programme (JS8 V63/V78...).
+JS8_NORMAL_V78_*.csv
+JS8_V63_*.csv
