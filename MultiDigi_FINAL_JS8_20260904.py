@@ -24865,6 +24865,31 @@ class UpdateCheckThread(QThread):
             self.check_failed.emit(str(e))
 
 
+class DownloadCountThread(QThread):
+    """V8.4 F4LPS : additionne download_count de tous les assets de toutes
+    les releases GitHub du dépôt (API publique /releases, sans authentification)."""
+    result = pyqtSignal(int, int)   # total_downloads, nb_releases
+    failed = pyqtSignal(str)
+
+    def run(self):
+        try:
+            total = 0
+            url = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases?per_page=100"
+            req = urllib.request.Request(
+                url, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'MultiDigi-UpdateCheck'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                releases = json.loads(r.read().decode('utf-8', errors='replace'))
+            for rel in releases:
+                for a in rel.get('assets', []) or []:
+                    total += int(a.get('download_count', 0) or 0)
+            self.result.emit(total, len(releases))
+        except urllib.error.HTTPError as e:
+            self.failed.emit(f"HTTP {e.code}")
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 # ============================================================================
 # THREAD DECODEUR DE LANGUES — Micro voix -> texte -> traduction -> zone TX
 # ============================================================================
@@ -29146,6 +29171,7 @@ class PSKMainWindow(QMainWindow):
         # décalée pour ne pas retarder l'affichage de la fenêtre.
         if getattr(self, 'update_autocheck_cb', None) is not None and self.update_autocheck_cb.isChecked():
             QTimer.singleShot(4000, lambda: self._check_for_updates(manual=False))
+        QTimer.singleShot(4500, self._check_download_count)
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -31569,6 +31595,18 @@ class PSKMainWindow(QMainWindow):
         self.update_autocheck_cb.setChecked(True)
         self.update_autocheck_cb.toggled.connect(lambda *_: self._save_settings())
         lay.addWidget(self.update_autocheck_cb)
+
+        # V8.4 F4LPS : compteur de téléchargements — additionne download_count
+        # de tous les assets de toutes les releases GitHub (API publique,
+        # aucune authentification nécessaire).
+        dl_row = QHBoxLayout()
+        self.download_count_label = QLabel("📥 Téléchargements : —")
+        self.download_count_label.setStyleSheet("color:#88ccff;font-size:9pt;")
+        dl_row.addWidget(self.download_count_label, 1)
+        btn_dl_count = QPushButton("🔄 Actualiser")
+        btn_dl_count.clicked.connect(self._check_download_count)
+        dl_row.addWidget(btn_dl_count)
+        lay.addLayout(dl_row)
         return w
 
     # ── Vérification de mise à jour (GitHub Releases) ──────────────────────────
@@ -31631,6 +31669,26 @@ class PSKMainWindow(QMainWindow):
         # créé...) ; seule une vérification manuelle informe de l'échec.
         if getattr(self, '_update_check_manual', False):
             self._set_status(f"⚠️ Vérification de mise à jour impossible : {msg}")
+
+    def _check_download_count(self):
+        if getattr(self, '_dl_count_thread', None) is not None and self._dl_count_thread.isRunning():
+            return
+        if hasattr(self, 'download_count_label'):
+            self.download_count_label.setText("📥 Téléchargements : vérification...")
+        self._dl_count_thread = DownloadCountThread()
+        self._dl_count_thread.result.connect(self._on_download_count_result)
+        self._dl_count_thread.failed.connect(self._on_download_count_failed)
+        self._dl_count_thread.start()
+
+    def _on_download_count_result(self, total, nb_releases):
+        if hasattr(self, 'download_count_label'):
+            self.download_count_label.setText(
+                f"📥 Téléchargements : {total} (sur {nb_releases} release{'s' if nb_releases > 1 else ''})"
+            )
+
+    def _on_download_count_failed(self, msg):
+        if hasattr(self, 'download_count_label'):
+            self.download_count_label.setText(f"📥 Téléchargements : indisponible ({msg})")
 
     # ── Peuplement ────────────────────────────────────────────────────────────
 

@@ -13,3 +13,17 @@ settings*.json
 # Traces de diagnostic générées localement par le programme (JS8 V63/V78...).
 JS8_NORMAL_V78_*.csv
 JS8_V63_*.csv
+
+# Artefacts de build PyInstaller / Inno Setup — reconstruits, jamais publiés
+# ici (les installeurs sont attachés directement aux releases GitHub).
+build/
+dist/
+*.spec
+Output/
+
+# Fichiers internes de l'outillage Claude Code — locaux, pas du code du projet.
+.claude/
+
+# Cache local du dictionnaire JSC JS8Call (téléchargé automatiquement au
+# premier lancement, régénérable, pas du code source).
+JS8_JSC_MAP_V303.json.gz
