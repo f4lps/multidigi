@@ -36,6 +36,20 @@ Ham Spirit — Logiciel libre pour radioamateurs
 """
 
 import sys, os, re, json, time, math, struct, socket, threading, queue, functools, uuid, gzip, codecs
+
+# V8.4.1 F4LPS : en exécutable "fenêtré" (sans console, --windowed/--noconsole),
+# sys.stdout/sys.stderr valent None sous Windows. Le programme utilise print()
+# abondamment pour ses diagnostics ; sans ce filet, le premier print() plante
+# avec "AttributeError: 'NoneType' object has no attribute 'write'".
+class _NullWriter:
+    def write(self, *a, **k): pass
+    def flush(self, *a, **k): pass
+    def isatty(self): return False
+if sys.stdout is None:
+    sys.stdout = _NullWriter()
+if sys.stderr is None:
+    sys.stderr = _NullWriter()
+
 import os
 import csv
 import urllib.parse, urllib.request, webbrowser
