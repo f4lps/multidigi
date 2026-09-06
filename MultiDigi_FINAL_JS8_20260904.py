@@ -24927,13 +24927,31 @@ class SpeechTranslateThread(QThread):
         return table.get(low, low.split('-')[0] if low else default)
 
     @staticmethod
+    def _looks_like_error_page(s):
+        """V8.4.1 F4LPS : détecte une page d'erreur Google renvoyée comme si
+        c'était une traduction valide (deep_translator ne lève alors aucune
+        exception, il faut donc filtrer nous-mêmes ce cas)."""
+        s = str(s or '').strip()
+        if not s:
+            return True
+        low = s.lower()
+        # Marqueurs sans apostrophe : la page d'erreur Google utilise une
+        # apostrophe typographique (’) selon l'encodage, peu fiable à matcher.
+        return any(marker in low for marker in (
+            "error 500", "server error", "all we know",
+            "<html", "<!doctype html", "error 404", "error 400",
+        ))
+
+    @staticmethod
     def _google_translate(text, src_lang, dst_lang):
         """Traduction robuste : accepte Français/Anglais ou fr/en, puis remplace vraiment le résultat."""
         src_short = SpeechTranslateThread._norm_lang_code(src_lang, 'auto')
         dst_short = SpeechTranslateThread._norm_lang_code(dst_lang, 'fr')
         try:
             from deep_translator import GoogleTranslator
-            return GoogleTranslator(source=src_short, target=dst_short).translate(text)
+            result = GoogleTranslator(source=src_short, target=dst_short).translate(text)
+            if not SpeechTranslateThread._looks_like_error_page(result):
+                return result
         except Exception:
             pass
         try:
@@ -24945,9 +24963,12 @@ class SpeechTranslateThread(QThread):
             url = 'https://translate.googleapis.com/translate_a/single?' + q
             with urllib.request.urlopen(url, timeout=12) as r:
                 data = _json.loads(r.read().decode('utf-8', errors='replace'))
-            return ''.join(part[0] for part in data[0] if part and part[0])
+            result = ''.join(part[0] for part in data[0] if part and part[0])
+            if SpeechTranslateThread._looks_like_error_page(result):
+                raise RuntimeError("Réponse invalide du service de traduction")
+            return result
         except Exception as e:
-            raise RuntimeError("Traduction impossible : installe deep-translator ou vérifie Internet") from e
+            raise RuntimeError("Traduction impossible : service Google indisponible, réessaie plus tard") from e
 
     def run(self):
         try:
@@ -26421,7 +26442,10 @@ class RadioController:
             if self.connection_type == 'flrig':
                 self._flrig_call('main.set_frequency','rig.set_vfoA',args=(float(freq_hz),))
                 return True
-            if self.protocol=='icom': self._icom_set_freq(int(freq_hz))
+            if self.protocol=='icom':
+                self._icom_set_freq(int(freq_hz))
+            else:
+                self._yaesu_set_freq(int(freq_hz))
             return True
         except: return False
 
@@ -26437,6 +26461,11 @@ class RadioController:
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(1,)); return
             if self.protocol=='icom':
                 self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x01,0xFD]))
+            else:
+                # V8.4.1 F4LPS : PTT Yaesu (protocole CAT 5 octets) manquait —
+                # la fréquence se lisait mais l'émission ne partait jamais
+                # en connexion série directe (hors OmniRig/HRD/FLRig).
+                self._yaesu_ptt_on()
         except: pass
 
     def ptt_off(self):
@@ -26451,6 +26480,8 @@ class RadioController:
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(0,)); return
             if self.protocol=='icom':
                 self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x00,0xFD]))
+            else:
+                self._yaesu_ptt_off()
         except: pass
 
     def set_mode_usb(self):
@@ -26554,6 +26585,21 @@ class RadioController:
         for b in resp[:4]: freq=freq*100+(b>>4)*10+(b&0xF)
         return freq*10
 
+    def _yaesu_set_freq(self, freq_hz):
+        """CAT Yaesu 5 octets (FT-847/857/897/100...) : commande 0x01,
+        fréquence en BCD sur 4 octets, pas de 10 Hz."""
+        val = int(round(freq_hz / 10.0))
+        s = f"{val:08d}"
+        bcd = bytes((int(s[i]) << 4) | int(s[i+1]) for i in range(0, 8, 2))
+        self.serial_port.write(bcd + bytes([0x01]))
+
+    def _yaesu_ptt_on(self):
+        """CAT Yaesu 5 octets : commande 0x0F, P1=0x00 -> TX ON."""
+        self.serial_port.write(bytes([0x00, 0, 0, 0, 0x0F]))
+
+    def _yaesu_ptt_off(self):
+        """CAT Yaesu 5 octets : commande 0x0F, P1=0x80 -> TX OFF (RX)."""
+        self.serial_port.write(bytes([0x80, 0, 0, 0, 0x0F]))
 
 
 
