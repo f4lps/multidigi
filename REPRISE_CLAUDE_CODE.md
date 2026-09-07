@@ -2,7 +2,7 @@
 
 ## Fichier à utiliser
 
-`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.2**
+`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.3**
 (constante `PROGRAM_VERSION_TAG` en haut du fichier).
 
 ## Dépôt GitHub
@@ -21,35 +21,28 @@
     installeur.** Le dernier commit (diagnostic CAT série, voir plus bas)
     n'a pas non plus de release.
 
-## ⚠️ Dossier en cours — CAT série ne remonte pas la fréquence
+## ✅ Résolu (7 sept 2026, session suivante) — CAT série ne remontait pas la fréquence
 
-Un utilisateur connecte MultiDigi en CAT série direct sur un port
-**"ELTIMA Virtual Serial Port" (COM11)**, protocole Icom CI-V, 0x94
-(IC-7300), 57600 bauds. Le port s'ouvre ("connecté") mais **aucune
-fréquence ne s'affiche** (`get_frequency()` renvoie 0). Point clé donné par
-l'utilisateur : **son autre logiciel "CW Terminal" (aussi de lui, F4LPS)
-fonctionne en CAT direct sur ce même port** — donc le port lui-même est
-fonctionnel, le bug est probablement dans notre séquence CI-V ou son timing,
-pas dans le pont série virtuel.
+Cause réelle trouvée et corrigée en **8.4.3**, grâce au diagnostic ajouté
+en 8.4.3-dev (voir historique git) : dans le panneau CAT **réellement
+utilisé** par l'utilisateur (`_toggle_cat` du panneau intégré aux Réglages
+PSK, vers la ligne ~29050), `addr = self._civ.currentText()` passait le
+**texte affiché** du menu déroulant (`"0x94 (IC-7300)"`) tel quel comme
+adresse CI-V à `connect_serial`, au lieu de l'entier `0x94`. Chaque commande
+CI-V (`bytes([0xFE,0xFE,addr,...])`) levait donc une `TypeError` avant même
+de partir sur le port série — d'où le silence total malgré un port/câble/
+radio fonctionnels (confirmé par le diagnostic : `'str' object cannot be
+interpreted as an integer`). L'autre panneau CAT (celui de l'écran
+"Réglages généraux", `_toggle_cat` vers la ligne ~38500) faisait déjà la
+conversion hex correctement — c'est pour ça que ce chemin-là n'était
+peut-être jamais suspecté. Tout le travail précédent (DTR/RTS forcés,
+timing, délais) n'était probablement pas la vraie cause, mais reste en
+place (inoffensif, peut aider sur d'autres adaptateurs).
 
-Déjà tenté (dans `RadioController.connect_serial` / `_icom_get_freq`,
-classe vers la ligne ~26400 du fichier) :
-- DTR/RTS forcés à `True` à l'ouverture du port.
-- Délai de stabilisation de 0.3s après ouverture avant le premier échange.
-- 4 essais espacés de 0.3s au lieu de 2.
-- Délai d'attente de réponse augmenté (0.25→0.35s Icom, 0.1→0.2s Yaesu).
-- **Diagnostic ajouté** : `_icom_get_freq_debug()` renvoie aussi les octets
-  bruts reçus ; si la lecture échoue, le message de connexion affiche soit
-  "aucun octet reçu" soit "réponse reçue mais illisible : xx xx xx..."
-  (hexdump), pour savoir si le silence est total ou si quelque chose répond
-  mais mal interprété (mauvaise adresse CI-V, écho seul, bruit...).
-
-**Prochaine étape impérative :** demander à l'utilisateur de relancer
-`MultiDigi_FINAL_JS8_20260904.py` depuis les sources (pas encore
-reconstruit en exécutable), se reconnecter en CAT série, et donner le
-message exact affiché. Corriger en fonction de ce retour, puis reconstruire
-l'exécutable + l'installeur (voir procédure ci-dessous) et publier une
-nouvelle release.
+**Prochaine étape :** demander à l'utilisateur de retester en 8.4.3 (depuis
+les sources ou un nouvel exécutable/installeur à publier) pour confirmer
+que la fréquence s'affiche enfin. Si oui : reconstruire l'exécutable +
+l'installeur (procédure ci-dessous) et publier la release 8.4.3.
 
 ## Fonctionnalités ajoutées / corrigées cette session (4-7 sept 2026)
 
