@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.4"
+PROGRAM_VERSION_TAG = "8.4.5"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26683,7 +26683,33 @@ class RadioController:
             pos=i*2; bcd.append((int(freq_str[pos])<<4)|int(freq_str[pos+1]))
         cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x05])+bytes(bcd)+bytes([0xFD])
         with self._lock:
-            self.serial_port.write(cmd); time.sleep(0.05); self.serial_port.read(10)
+            self.serial_port.write(cmd)
+            self._read_with_deadline(10, 0.3)
+
+    def _read_with_deadline(self, max_bytes, deadline_s):
+        """V8.4.5 F4LPS : remplace les appels directs à serial_port.read(n).
+        Sur le pont série virtuel de l'utilisateur (Eltima), le timeout de
+        pyserial n'était visiblement pas respecté correctement — un simple
+        read(64) avec timeout=1 gardait le thread de sondage fréquence
+        occupé en continu (~90% d'un cœur CPU en permanence dès la
+        connexion CAT série, confirmé par mesure sur sa machine), au lieu
+        de dormir la majeure partie du temps comme prévu. On sonde nous-
+        mêmes in_waiting avec de petites pauses, et on ne lit que ce qui
+        est réellement arrivé, sans jamais dépendre du timeout interne du
+        driver pour ce port précis."""
+        deadline = time.time() + deadline_s
+        while time.time() < deadline:
+            try:
+                n = self.serial_port.in_waiting
+            except Exception:
+                n = 0
+            if n:
+                try:
+                    return self.serial_port.read(min(n, max_bytes))
+                except Exception:
+                    return b''
+            time.sleep(0.02)
+        return b''
 
     def _icom_get_freq(self):
         freq, _raw = self._icom_get_freq_debug()
@@ -26699,7 +26725,10 @@ class RadioController:
         exception remontait à l'appelant et écrasait silencieusement le
         diagnostic, affichant à tort "aucun octet reçu" au lieu de la vraie
         erreur d'E/S. On capture maintenant l'erreur et on la renvoie sous
-        forme de texte via self.last_io_error pour l'afficher à l'utilisateur."""
+        forme de texte via self.last_io_error pour l'afficher à l'utilisateur.
+        V8.4.5 F4LPS : remplace read(64) par _read_with_deadline (voir
+        ci-dessus) — cause réelle du ralentissement RX/TX en CAT série
+        direct signalé après la 8.4.4."""
         self.last_io_error = None
         with self._lock:
             cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x03,0xFD])
@@ -26709,8 +26738,7 @@ class RadioController:
                 pass
             try:
                 self.serial_port.write(cmd)
-                time.sleep(0.35)
-                resp=self.serial_port.read(64)
+                resp=self._read_with_deadline(64, 0.6)
             except Exception as e:
                 self.last_io_error = str(e)
                 return 0, b''
@@ -26726,8 +26754,8 @@ class RadioController:
 
     def _yaesu_get_freq(self):
         with self._lock:
-            self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.2)
-            resp=self.serial_port.read(5)
+            self.serial_port.write(bytes([0,0,0,0,3]))
+            resp=self._read_with_deadline(5, 0.4)
         if len(resp)<5: return 0
         freq=0
         for b in resp[:4]: freq=freq*100+(b>>4)*10+(b&0xF)
