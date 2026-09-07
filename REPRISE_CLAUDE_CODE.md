@@ -1,8 +1,8 @@
-# Reprise MultiDigi — 7 septembre 2026
+# Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
 ## Fichier à utiliser
 
-`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.3**
+`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.4**
 (constante `PROGRAM_VERSION_TAG` en haut du fichier).
 
 ## Dépôt GitHub
@@ -16,35 +16,55 @@
   - `v8.4.0` — premier installeur Windows (189 Mo, avec console de debug)
   - `v8.4.1` — traducteur + PTT Yaesu + suppression de la fenêtre console
     (145 Mo)
-  - **`v8.4.2` — corrections RSID CW / persistance réglages CAT+HRD —
-    codé et poussé sur GitHub, MAIS PAS ENCORE publié comme release avec
-    installeur.** Le dernier commit (diagnostic CAT série, voir plus bas)
-    n'a pas non plus de release.
+  - `v8.4.2` et `v8.4.3-dev` (diagnostic CAT) — jamais publiées comme
+    releases séparées (directement remplacées par 8.4.3).
+  - **`v8.4.3`** — corrige la cause réelle du silence CAT série (adresse
+    CI-V jamais convertie en entier). ⚠️ Publiée d'abord avec un tag erroné
+    `v4.8.3` (chiffres inversés à la saisie) + mauvais fichier joint
+    (`MultiDigi.exe` seul au lieu de l'installeur) → supprimée et
+    republiée correctement. **Toujours vérifier après publication** avec :
+    `curl -s https://api.github.com/repos/f4lps/multidigi/releases/latest`
+    (voir tag_name et assets) avant de considérer une release comme bonne.
+  - **`v8.4.4`** (dernière, actuelle) — corrige un ralentissement RX/TX
+    signalé par l'utilisateur, présent uniquement en CAT série direct
+    (jamais en HRD/OmniRig/FLRig). Vérifiée correcte via l'API (tag
+    `v8.4.4`, un seul asset `MultiDigi_Setup_8.4.4.exe` 139 Mo).
 
-## ✅ Résolu (7 sept 2026, session suivante) — CAT série ne remontait pas la fréquence
+## ✅ Résolu — CAT série ne remontait pas la fréquence (→ 8.4.3)
 
-Cause réelle trouvée et corrigée en **8.4.3**, grâce au diagnostic ajouté
-en 8.4.3-dev (voir historique git) : dans le panneau CAT **réellement
-utilisé** par l'utilisateur (`_toggle_cat` du panneau intégré aux Réglages
-PSK, vers la ligne ~29050), `addr = self._civ.currentText()` passait le
-**texte affiché** du menu déroulant (`"0x94 (IC-7300)"`) tel quel comme
-adresse CI-V à `connect_serial`, au lieu de l'entier `0x94`. Chaque commande
-CI-V (`bytes([0xFE,0xFE,addr,...])`) levait donc une `TypeError` avant même
-de partir sur le port série — d'où le silence total malgré un port/câble/
-radio fonctionnels (confirmé par le diagnostic : `'str' object cannot be
-interpreted as an integer`). L'autre panneau CAT (celui de l'écran
-"Réglages généraux", `_toggle_cat` vers la ligne ~38500) faisait déjà la
-conversion hex correctement — c'est pour ça que ce chemin-là n'était
-peut-être jamais suspecté. Tout le travail précédent (DTR/RTS forcés,
-timing, délais) n'était probablement pas la vraie cause, mais reste en
-place (inoffensif, peut aider sur d'autres adaptateurs).
+Cause réelle : dans le panneau CAT **réellement utilisé** par
+l'utilisateur (`_toggle_cat` du panneau intégré aux Réglages PSK, vers la
+ligne ~29050), `addr = self._civ.currentText()` passait le **texte
+affiché** du menu déroulant (`"0x94 (IC-7300)"`) tel quel comme adresse
+CI-V à `connect_serial`, au lieu de l'entier `0x94`. Chaque commande CI-V
+levait donc une `TypeError` avant même de partir sur le port série — d'où
+le silence total malgré un port/câble/radio fonctionnels. Corrigé en
+extrayant l'entier hexa comme le fait déjà l'autre panneau CAT (celui de
+"Réglages généraux", `_toggle_cat` vers la ligne ~38500).
 
-**Prochaine étape :** demander à l'utilisateur de retester en 8.4.3 (depuis
-les sources ou un nouvel exécutable/installeur à publier) pour confirmer
-que la fréquence s'affiche enfin. Si oui : reconstruire l'exécutable +
-l'installeur (procédure ci-dessous) et publier la release 8.4.3.
+## ✅ Résolu — Ralentissement RX/TX en CAT série direct (→ 8.4.4)
 
-## Fonctionnalités ajoutées / corrigées cette session (4-7 sept 2026)
+Signalé juste après la 8.4.3 : "ça rame en réception et émission", mais
+confirmé par l'utilisateur comme **spécifique au CAT série direct**
+(jamais avec HRD, qui passe par le réseau). Cause : le thread de sondage
+de fréquence (`_FreqPollThread`, toutes les 3s en tâche de fond) et les
+actions PTT/QSY/changement de mode déclenchées depuis l'interface
+écrivaient toutes sur le même port série sans synchronisation cohérente
+(seule la lecture de fréquence utilisait déjà `RadioController._lock`).
+Corrigé (classe `RadioController` vers la ligne ~26410 et les deux classes
+`_FreqPollThread` vers les lignes ~26374 et ~28652) :
+- Toutes les écritures série (PTT, QSY, USB/CW, Yaesu) passent maintenant
+  par `self._lock`, comme la lecture de fréquence.
+- Nouveau flag `RadioController._tx_active` : levé par `ptt_on` avant
+  l'écriture série, baissé par `ptt_off` dans un `finally`. Le thread de
+  sondage fréquence saute son tour tant que ce flag est actif, pour ne
+  jamais disputer le port avec l'audio TX au moment critique.
+
+Pas encore reconfirmé en usage réel par l'utilisateur au moment de ce
+point de reprise (juste rebuild + republié) — **prochaine étape : demander
+confirmation que le ralentissement a bien disparu en usage normal.**
+
+## Fonctionnalités ajoutées / corrigées lors des sessions précédentes (4-7 sept 2026)
 
 - **Thèmes d'interface** : Aluminium usé (par défaut), Carbone, Néon
   (original) — sélecteur dans ⚙ Réglages généraux.
@@ -68,7 +88,12 @@ l'installeur (procédure ci-dessous) et publier la release 8.4.3.
   hôtes/ports HRD et FLRig, rig OmniRig) — persistés maintenant dans
   `self._cat_settings` (clé JSON `cat_settings`).
 - **Identifiants HRD Logbook** (IP/port dans "LOG QSO + Loggers" → onglet
-  HRD) jamais mémorisés — persistés dans `_logbook_settings`.
+  HRD) jamais mémorisés — persistés dans `_logbook_settings`. Le port UDP
+  ADIF (2333 par défaut) reste éditable à la main — signalé par
+  l'utilisateur que ça peut différer entre HRD 6.8 et 6.9 (visible dans
+  HRD : File → QSO Forwarding → UDP Receive port). Pas de détection
+  automatique implémentée (demande abandonnée par l'utilisateur, "pas
+  grave").
 - **Bouton "🔍 Auto-détecter le port"** dans le panneau RADIO CAT — teste
   chaque port série disponible en lecture seule (jamais d'émission).
 - **Fenêtre console supprimée** de l'exécutable (`--windowed` au lieu de
@@ -133,10 +158,20 @@ d'environ 614 Mo à 442 Mo.
 5. Aller sur https://github.com/f4lps/multidigi/releases/new (⚠️ si le tag
    existe déjà, GitHub refuse — éditer la release existante plutôt via
    `/releases/edit/vX.Y.Z`).
-6. Glisser `installer\Output\MultiDigi_Setup_X.Y.Z.exe` dans les assets.
-7. Publier — je n'ai pas accès au compte GitHub, cette étape doit être
-   faite manuellement par l'utilisateur (je peux ouvrir la page pour lui
-   dans le navigateur).
+6. **Taper le tag AU CLAVIER avec attention** (`vX.Y.Z`) — un tag mal
+   saisi (ex. chiffres inversés `v4.8.3` au lieu de `v8.4.3`) casse la
+   détection de mise à jour car les tags sont comparés numériquement.
+7. Glisser **uniquement** `installer\Output\MultiDigi_Setup_X.Y.Z.exe`
+   dans les assets — ne pas laisser traîner `dist\MultiDigi\MultiDigi.exe`
+   (inutile seul, sans son dossier `_internal`).
+8. Publier — l'utilisateur doit le faire lui-même (accès au compte
+   GitHub), Claude peut l'assister pas à pas mais n'a pas d'accès direct
+   au navigateur de l'utilisateur (Claude in Chrome non installé/connecté
+   lors de cette session — passer par des instructions textuelles).
+9. **Toujours vérifier après coup** avec :
+   `curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/f4lps/multidigi/releases/latest`
+   → contrôler `tag_name` (doit correspondre exactement) et `assets`
+   (un seul fichier, le bon installeur, la bonne taille).
 
 ## Sécurité radio (toujours valable)
 
@@ -147,9 +182,14 @@ d'environ 614 Mo à 442 Mo.
 
 ## Points restants à vérifier / améliorer
 
-- **CAT série direct sans réponse radio** (voir section dédiée en haut).
+- **Confirmer que le correctif de ralentissement RX/TX (8.4.4) résout bien
+  le problème en usage réel** (voir section dédiée ci-dessus).
 - Vérifier la connexion HRD réelle (l'utilisateur confirme qu'elle
-  fonctionne, mais pas testée par Claude directement).
+  fonctionne — testé dans cette session via la fenêtre "Logger le QSO" →
+  HRD Logbook, semble opérationnel).
+- Le port UDP ADIF HRD Logbook (2333 par défaut) peut différer selon la
+  version de HRD (6.8 vs 6.9) — l'utilisateur le sait et ajuste
+  manuellement, pas de détection auto demandée pour l'instant.
 - Les macros ont été relues (code correct), pas testées en conditions
   réelles par l'utilisateur.
 - Tester en réception radio réelle les modes JS8 SLOW/FAST/40/60.
