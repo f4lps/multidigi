@@ -26440,32 +26440,65 @@ class RadioController:
             # espacés. Si ça échoue quand même, on rapporte les octets bruts
             # reçus (le cas échéant) pour diagnostiquer précisément la cause.
             time.sleep(0.3)
-            freq = 0
-            last_raw = b''
-            last_io_error = None
-            for _ in range(4):
+
+            def _try_reads(n):
+                f, raw, ioerr = 0, b'', None
+                for _ in range(n):
+                    try:
+                        if protocol == 'icom':
+                            f, raw = self._icom_get_freq_debug()
+                            ioerr = self.last_io_error
+                        else:
+                            f = self._yaesu_get_freq()
+                            raw = b''
+                    except Exception as e:
+                        f = 0
+                        ioerr = str(e)
+                    if f:
+                        break
+                    time.sleep(0.3)
+                return f, raw, ioerr
+
+            freq, last_raw, last_io_error = _try_reads(4)
+            dtr_rts_note = "DTR/RTS forcés actifs"
+            if not freq:
+                # V8.4.4 F4LPS : sur ce pont série virtuel (Eltima), forcer
+                # DTR/RTS actifs (ajouté en 8.4.2 pour d'autres adaptateurs)
+                # pourrait au contraire bloquer la liaison si l'autre logiciel
+                # de l'utilisateur qui fonctionne (CW Terminal) ne touche pas
+                # à ces lignes. On retente sans les forcer, pour comparer.
                 try:
-                    if protocol == 'icom':
-                        freq, last_raw = self._icom_get_freq_debug()
-                        last_io_error = self.last_io_error
-                    else:
-                        freq = self._yaesu_get_freq()
-                        last_raw = b''
-                except Exception as e:
-                    freq = 0
-                    last_io_error = str(e)
-                if freq:
-                    break
+                    self.serial_port.dtr = False
+                    self.serial_port.rts = False
+                except Exception:
+                    pass
                 time.sleep(0.3)
+                freq2, last_raw2, last_io_error2 = _try_reads(2)
+                if freq2:
+                    freq, last_raw, last_io_error = freq2, last_raw2, last_io_error2
+                    dtr_rts_note = "DTR/RTS désactivés (fonctionne mieux ainsi sur ce port !)"
+                else:
+                    # aucune des deux configurations n'a marché : on revient à
+                    # DTR/RTS actifs par défaut pour la suite de la session.
+                    try:
+                        self.serial_port.dtr = True
+                        self.serial_port.rts = True
+                    except Exception:
+                        pass
+                    if last_raw2:
+                        last_raw = last_raw2
+                    if last_io_error2:
+                        last_io_error = last_io_error2
+                    dtr_rts_note = "testé avec ET sans DTR/RTS forcés — aucun des deux n'a répondu"
             if freq:
-                return True, f"Connecté {port} {baudrate}bd — {freq/1e6:.4f} MHz"
+                return True, f"Connecté {port} {baudrate}bd — {freq/1e6:.4f} MHz ({dtr_rts_note})"
             if last_io_error:
-                return True, (f"Connecté {port} {baudrate}bd — ⚠️ erreur d'E/S sur le port : {last_io_error}")
+                return True, (f"Connecté {port} {baudrate}bd — ⚠️ erreur d'E/S sur le port : {last_io_error} ({dtr_rts_note})")
             if last_raw:
                 hexdump = last_raw.hex(' ')
-                return True, (f"Connecté {port} {baudrate}bd — ⚠️ réponse reçue mais illisible : {hexdump}")
+                return True, (f"Connecté {port} {baudrate}bd — ⚠️ réponse reçue mais illisible : {hexdump} ({dtr_rts_note})")
             return True, (f"Connecté {port} {baudrate}bd — ⚠️ aucun octet reçu de la radio "
-                           f"(vérifie baudrate/adresse CI-V/protocole et que le câble CAT est bien relié)")
+                           f"(vérifie baudrate/adresse CI-V/protocole et que le câble CAT est bien relié) — {dtr_rts_note}")
         except Exception as e: return False,str(e)
 
     def connect_omnirig(self, rig_number=1):
