@@ -25345,10 +25345,13 @@ class QSOLogDialog(QDialog):
         g.addWidget(QLabel("ℹ️  Dans HRD : File → QSO Forwarding → UDP Receive port 2333"))
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("IP :"))
-        self.hrd_ip = QLineEdit("127.0.0.1"); self.hrd_ip.setMaximumWidth(130)
+        # V8.4.1 F4LPS : IP/port jamais mémorisés (une nouvelle fenêtre est
+        # recréée à chaque clic sur "LOG QSO + Loggers"). Relus maintenant
+        # depuis _logbook_settings, sauvegardés à l'envoi.
+        self.hrd_ip = QLineEdit(str(self._logbook_settings.get('hrd_ip', '127.0.0.1'))); self.hrd_ip.setMaximumWidth(130)
         row1.addWidget(self.hrd_ip)
         row1.addWidget(QLabel("Port :"))
-        self.hrd_port_edit = QLineEdit("2333"); self.hrd_port_edit.setMaximumWidth(70)
+        self.hrd_port_edit = QLineEdit(str(self._logbook_settings.get('hrd_port', '2333'))); self.hrd_port_edit.setMaximumWidth(70)
         row1.addWidget(self.hrd_port_edit)
         row1.addStretch(); g.addLayout(row1)
         self._qso_fields("h", g, [
@@ -25371,6 +25374,14 @@ class QSOLogDialog(QDialog):
         try:
             ip = self.hrd_ip.text().strip()
             port = int(self.hrd_port_edit.text().strip())
+            try:
+                self._logbook_settings['hrd_ip'] = ip
+                self._logbook_settings['hrd_port'] = str(port)
+                if self._parent is not None:
+                    self._parent._logbook_settings = dict(self._logbook_settings)
+                    self._parent._save_settings()
+            except Exception:
+                pass
             call = self.h_call.text().strip().upper()
             rst_s = self.h_rst_s.text().strip(); rst_r = self.h_rst_r.text().strip()
             name = self.h_name.text().strip()
@@ -28710,6 +28721,12 @@ class RadioCatWindow(QDialog):
         gl = QGridLayout(g1); gl.setContentsMargins(10,14,10,8)
         gl.setSpacing(6); gl.setColumnStretch(1,1)
 
+        # V8.4.1 F4LPS : le port COM (et les autres champs CAT) n'étaient
+        # jamais mémorisés — une nouvelle fenêtre RadioCatWindow est créée
+        # à chaque ouverture de Réglages généraux. On relit maintenant les
+        # dernières valeurs utilisées depuis self.main._cat_settings.
+        _cs = dict(getattr(m, '_cat_settings', {}) or {})
+
         gl.addWidget(self._lbl("Port COM :"),     0,0)
         self._cat_port = QComboBox()
         try:
@@ -28719,24 +28736,35 @@ class RadioCatWindow(QDialog):
         except Exception: pass
         if not self._cat_port.count():
             self._cat_port.addItem("Aucun port")
+        _saved_port = _cs.get('port', '')
+        if _saved_port:
+            _idx = self._cat_port.findData(_saved_port)
+            if _idx >= 0:
+                self._cat_port.setCurrentIndex(_idx)
         gl.addWidget(self._cat_port, 0,1)
 
         gl.addWidget(self._lbl("Baudrate :"),     1,0)
         self._cat_baud = QComboBox()
         for b in ['4800','9600','19200','38400','57600','115200']:
             self._cat_baud.addItem(b)
-        self._cat_baud.setCurrentText('19200')
+        self._cat_baud.setCurrentText(str(_cs.get('baud', '19200')))
         gl.addWidget(self._cat_baud, 1,1)
 
         gl.addWidget(self._lbl("Protocole :"),    2,0)
         self._cat_proto = QComboBox()
         self._cat_proto.addItems(['Icom CI-V','Yaesu CAT'])
+        if str(_cs.get('protocol', '')) == 'yaesu':
+            self._cat_proto.setCurrentText('Yaesu CAT')
         gl.addWidget(self._cat_proto, 2,1)
 
         gl.addWidget(self._lbl("CI-V Adresse :"), 3,0)
         self._civ = QComboBox()
         for a in ['0x94 (IC-7300)','0x98 (IC-7610)','0x70 (IC-7100)','0xA2 (IC-705)','0x90 (IC-9700)']:
             self._civ.addItem(a)
+        if _cs.get('civ'):
+            _ci = self._civ.findText(str(_cs.get('civ')))
+            if _ci >= 0:
+                self._civ.setCurrentIndex(_ci)
         gl.addWidget(self._civ, 3,1)
 
         self._btn_cat = QPushButton("🔗 CONNECTER")
@@ -28748,9 +28776,21 @@ class RadioCatWindow(QDialog):
         self._btn_cat.clicked.connect(self._toggle_cat)
         gl.addWidget(self._btn_cat, 4,0,1,2)
 
+        # V8.4.1 F4LPS : détection automatique du port COM — teste chaque
+        # port série disponible en lecture de fréquence seule (aucune
+        # émission), et sélectionne le premier qui répond correctement.
+        self._btn_cat_auto = QPushButton("🔍 Auto-détecter le port")
+        self._btn_cat_auto.setStyleSheet(
+            "QPushButton{background:#1a1400;color:#ffaa44;font-weight:bold;"
+            "border:1px solid #664400;padding:5px;border-radius:3px;}"
+            "QPushButton:hover{background:#2a2000;border-color:#ffaa44;}"
+        )
+        self._btn_cat_auto.clicked.connect(self._auto_detect_cat_port)
+        gl.addWidget(self._btn_cat_auto, 5,0,1,2)
+
         self._cat_status = QLabel("Non connecté")
         self._cat_status.setStyleSheet("color:#ff6644;font-weight:bold;font-size:8pt;")
-        gl.addWidget(self._cat_status, 5,0,1,2)
+        gl.addWidget(self._cat_status, 6,0,1,2)
         lay.addWidget(g1)
 
         # ── HRD ───────────────────────────────────────────────────────────────
@@ -28758,10 +28798,10 @@ class RadioCatWindow(QDialog):
         g2l = QGridLayout(g2); g2l.setContentsMargins(10,14,10,8)
         g2l.setSpacing(6); g2l.setColumnStretch(1,1)
         g2l.addWidget(self._lbl("Hôte :"),0,0)
-        self._hrd_host = self._ed("127.0.0.1")
+        self._hrd_host = self._ed(_cs.get('hrd_host', '127.0.0.1'))
         g2l.addWidget(self._hrd_host, 0,1)
         g2l.addWidget(self._lbl("Port :"),1,0)
-        self._hrd_port = self._ed("7809")
+        self._hrd_port = self._ed(str(_cs.get('hrd_port', '7809')))
         g2l.addWidget(self._hrd_port, 1,1)
         self._btn_hrd = QPushButton("🔗 Connecter HRD")
         self._btn_hrd.setStyleSheet(self._btn_cat.styleSheet())
@@ -28777,10 +28817,10 @@ class RadioCatWindow(QDialog):
         g3l = QGridLayout(g3); g3l.setContentsMargins(10,14,10,8)
         g3l.setSpacing(6); g3l.setColumnStretch(1,1)
         g3l.addWidget(self._lbl("Hôte :"),0,0)
-        self._fl_host = self._ed("127.0.0.1")
+        self._fl_host = self._ed(_cs.get('fl_host', '127.0.0.1'))
         g3l.addWidget(self._fl_host, 0,1)
         g3l.addWidget(self._lbl("Port :"),1,0)
-        self._fl_port = self._ed("12345")
+        self._fl_port = self._ed(str(_cs.get('fl_port', '12345')))
         g3l.addWidget(self._fl_port, 1,1)
         self._btn_fl = QPushButton("🔗 Connecter FLRig")
         self._btn_fl.setStyleSheet(self._btn_cat.styleSheet())
@@ -28798,6 +28838,8 @@ class RadioCatWindow(QDialog):
         g4l.addWidget(self._lbl("Rig :"),0,0)
         self._omni_combo = QComboBox()
         self._omni_combo.addItems(["Rig 1","Rig 2"])
+        if int(_cs.get('omni_rig', 1)) == 2:
+            self._omni_combo.setCurrentIndex(1)
         g4l.addWidget(self._omni_combo, 0,1)
         self._btn_omni = QPushButton("🔗 Connecter OmniRig")
         self._btn_omni.setStyleSheet(self._btn_cat.styleSheet())
@@ -28830,6 +28872,74 @@ class RadioCatWindow(QDialog):
         root.addWidget(scroll)
 
     # ── Actions ───────────────────────────────────────────────────────────────
+    def _auto_detect_cat_port(self):
+        """V8.4.1 F4LPS : teste chaque port série disponible avec une simple
+        lecture de fréquence (CI-V ou CAT Yaesu) — jamais d'émission — et
+        sélectionne automatiquement le premier port qui répond correctement."""
+        if not SERIAL_AVAILABLE:
+            self._cat_status.setText("❌ pyserial non disponible")
+            self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
+            return
+        if self.main.radio_ctrl.connection_type == 'serial':
+            self._cat_status.setText("❌ Déconnecte d'abord la radio avant de relancer la détection")
+            self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
+            return
+        try:
+            import serial as _serial
+            import serial.tools.list_ports as _lp
+        except Exception as e:
+            self._cat_status.setText(f"❌ {e}")
+            return
+        proto = 'icom' if 'Icom' in self._cat_proto.currentText() else 'yaesu'
+        baud = int(self._cat_baud.currentText())
+        civ_txt = self._civ.currentText()
+        civ_addr = int(civ_txt.split('x')[1].split(' ')[0], 16) if '0x' in civ_txt else 0x94
+
+        self._btn_cat_auto.setEnabled(False)
+        self._cat_status.setText("🔍 Recherche en cours sur tous les ports...")
+        self._cat_status.setStyleSheet("color:#ffaa44;font-weight:bold;font-size:8pt;")
+        QApplication.processEvents()
+
+        found = None
+        for p in _lp.comports():
+            dev = p.device
+            try:
+                sp = _serial.Serial(port=dev, baudrate=baud, bytesize=8, parity='N',
+                                     stopbits=1, timeout=0.4, write_timeout=0.4)
+                try:
+                    sp.reset_input_buffer()
+                    if proto == 'icom':
+                        sp.write(bytes([0xFE, 0xFE, civ_addr, 0xE0, 0x03, 0xFD]))
+                        time.sleep(0.2)
+                        resp = sp.read(64)
+                        ok = any(
+                            resp[i] == 0xFE and resp[i+1] == 0xFE and resp[i+2] == 0xE0 and resp[i+4] == 0x03
+                            for i in range(max(0, len(resp) - 10))
+                        )
+                    else:
+                        sp.write(bytes([0, 0, 0, 0, 3]))
+                        time.sleep(0.2)
+                        resp = sp.read(5)
+                        ok = len(resp) == 5
+                finally:
+                    sp.close()
+                if ok:
+                    found = dev
+                    break
+            except Exception:
+                continue
+
+        self._btn_cat_auto.setEnabled(True)
+        if found:
+            idx = self._cat_port.findData(found)
+            if idx >= 0:
+                self._cat_port.setCurrentIndex(idx)
+            self._cat_status.setText(f"✅ Radio détectée sur {found} — clique CONNECTER")
+            self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
+        else:
+            self._cat_status.setText("❌ Aucune radio trouvée (vérifie protocole/baudrate/CI-V)")
+            self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
+
     def _toggle_cat(self):
         rc = self.main.radio_ctrl
         if rc.connection_type == 'serial':
@@ -28848,6 +28958,15 @@ class RadioCatWindow(QDialog):
                 self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
                 self._btn_cat.setText("🔌 DÉCONNECTER")
                 self.main._restart_freq_poll()
+                # V8.4.1 F4LPS : mémorise le port CAT qui vient de marcher.
+                try:
+                    cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                    cs.update({'port': port, 'baud': self._cat_baud.currentText(),
+                               'protocol': proto, 'civ': self._civ.currentText()})
+                    self.main._cat_settings = cs
+                    self.main._save_settings()
+                except Exception:
+                    pass
             else:
                 self._cat_status.setText(f"❌ {msg}")
                 self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
@@ -28868,6 +28987,13 @@ class RadioCatWindow(QDialog):
                 self._hrd_status.setStyleSheet("color:#00ff66;font-size:8pt;")
                 self._btn_hrd.setText("🔌 Déconnecter HRD")
                 self.main._restart_freq_poll()
+                try:
+                    cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                    cs.update({'hrd_host': host, 'hrd_port': port})
+                    self.main._cat_settings = cs
+                    self.main._save_settings()
+                except Exception:
+                    pass
             else:
                 self._hrd_status.setText(f"❌ {msg}")
                 self._hrd_status.setStyleSheet("color:#ff4444;font-size:8pt;")
@@ -28888,6 +29014,13 @@ class RadioCatWindow(QDialog):
                 self._fl_status.setStyleSheet("color:#00ff66;font-size:8pt;")
                 self._btn_fl.setText("🔌 Déconnecter FLRig")
                 self.main._restart_freq_poll()
+                try:
+                    cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                    cs.update({'fl_host': host, 'fl_port': port})
+                    self.main._cat_settings = cs
+                    self.main._save_settings()
+                except Exception:
+                    pass
             else:
                 self._fl_status.setText(f"❌ {msg}")
                 self._fl_status.setStyleSheet("color:#ff4444;font-size:8pt;")
@@ -28907,6 +29040,13 @@ class RadioCatWindow(QDialog):
                 self._btn_omni.setText("🔌 Déconnecter OmniRig")
                 self.main._restart_freq_poll()
                 self.main._set_status(f"✅ OmniRig : {msg}")
+                try:
+                    cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                    cs['omni_rig'] = rig_n
+                    self.main._cat_settings = cs
+                    self.main._save_settings()
+                except Exception:
+                    pass
             else:
                 self._omni_status.setText(f"❌ {msg}")
                 self._omni_status.setStyleSheet("color:#ff4444;font-size:8pt;")
@@ -29171,6 +29311,10 @@ class PSKMainWindow(QMainWindow):
         ]
         self._loading_settings = False
         self._logbook_settings = {'logsel_hrd': False, 'logsel_qrz': False, 'qrz_api_key': '', 'qrz_mycall': 'F4LPS', 'qrz_xml_user': '', 'qrz_xml_password': '', 'hamqth_user': '', 'hamqth_password': ''}
+        # V8.4.1 F4LPS : mémoire du panneau RADIO CAT (port COM, baud,
+        # protocole, adresse CI-V, hôtes/ports HRD/FLRig, rig OmniRig) —
+        # ces champs se réinitialisaient à chaque ouverture de Réglages.
+        self._cat_settings = {}
 
         # V1.6.64 F4LPS — mémoire infos station réelle pour les macros.
         # Avant, les champs des réglages (Nom, QTH, Locator, RIG, antenne, etc.)
@@ -35010,7 +35154,10 @@ class PSKMainWindow(QMainWindow):
         # Un préfixe texte [RSID] devant une directive [JS8:HB]/[JS8:DIR...]
         # empêcherait le packer structuré de la reconnaître et ferait rejeter
         # le caractère '[' avant même toute commande PTT.
-        if getattr(self, '_family', '') == 'JS8':
+        # V8.4.1 F4LPS : le CW ne doit jamais recevoir de préfixe RSID (tonalité
+        # numérique incongrue devant un message envoyé à l'oreille) — même
+        # exclusion que JS8, qui s'identifie déjà par sa propre synchronisation.
+        if getattr(self, '_family', '') in ('JS8', 'CW'):
             return text
         if not text or not self._rsid_tx_enabled():
             return text
@@ -35428,7 +35575,7 @@ class PSKMainWindow(QMainWindow):
         # - le texte réellement émis est affiché temporairement dans la grande fenêtre TX
         #   pour que le suivi vert/barré fonctionne aussi pendant TEST TX ;
         # - à la fin du test, le texte utilisateur original est restauré automatiquement.
-        if is_test_tx and not _wf_direct_only:
+        if is_test_tx and not _wf_direct_only and getattr(self, '_family', '') not in ('JS8', 'CW'):
             label = self._rsid_current_mode_label()
             text = (f"[RSID] {label}\n" if label else "") + orig_text
         else:
@@ -38597,6 +38744,8 @@ class PSKMainWindow(QMainWindow):
                 self._psk_reporter_settings = d.get('psk_reporter', {'enabled': False, 'callsign': d.get('mycall','F4LPS'), 'locator': d.get('locator','JN28TJ'), 'software': PROGRAM_SOFTWARE_NAME, 'server': 'report.pskreporter.info', 'port': 4739, 'auto_spot': True})
                 self._wsjtx_udp_settings = d.get('wsjtx_udp', getattr(self, '_wsjtx_udp_settings', {}))
                 self._logbook_settings = d.get('logbook', getattr(self, '_logbook_settings', {})) or getattr(self, '_logbook_settings', {})
+                # V8.4.1 F4LPS : mémoire du panneau RADIO CAT.
+                self._cat_settings = d.get('cat_settings', {}) or {}
                 _js8_auto = d.get('js8_automation', {}) or {}
                 if hasattr(self, 'js8_hb_interval_spin'):
                     self.js8_hb_interval_spin.setValue(
@@ -38752,6 +38901,7 @@ class PSKMainWindow(QMainWindow):
                 "psk_reporter": getattr(self, '_psk_reporter_settings', {}),
                 "wsjtx_udp": getattr(self, '_wsjtx_udp_settings', {}),
                 "logbook": getattr(self, '_logbook_settings', {}),
+                "cat_settings": getattr(self, '_cat_settings', {}),
                 "js8_automation": {
                     "hb_interval_min": int(self.js8_hb_interval_spin.value()) if hasattr(self, 'js8_hb_interval_spin') else 10,
                     "confirm": bool(self.js8_auto_confirm_cb.isChecked()) if hasattr(self, 'js8_auto_confirm_cb') else True,
