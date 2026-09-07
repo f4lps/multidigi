@@ -26433,24 +26433,33 @@ class RadioController:
             except Exception:
                 pass
             self.connection_type='serial'; self.protocol=protocol; self.civ_address=civ_address
-            # V8.4.2 F4LPS : le port pouvait s'ouvrir sans que la radio ne
-            # réponde réellement (mauvais baudrate, mauvaise adresse CI-V,
-            # câble/port non relié à la radio) — "connecté" ne voulait alors
-            # rien dire de fiable. On vérifie ici par une vraie lecture de
-            # fréquence, avec deux essais (le premier échange après ouverture
-            # du port est parfois perdu sur les ports virtuels).
+            # V8.4.3 F4LPS : sur certains ports virtuels (Eltima...), le pont
+            # met un instant à s'établir juste après l'ouverture — un premier
+            # échange immédiat peut partir dans le vide. On laisse le temps
+            # de s'installer avant le premier essai, puis plusieurs essais
+            # espacés. Si ça échoue quand même, on rapporte les octets bruts
+            # reçus (le cas échéant) pour diagnostiquer précisément la cause.
+            time.sleep(0.3)
             freq = 0
-            for _ in range(2):
+            last_raw = b''
+            for _ in range(4):
                 try:
-                    freq = self._icom_get_freq() if protocol == 'icom' else self._yaesu_get_freq()
+                    if protocol == 'icom':
+                        freq, last_raw = self._icom_get_freq_debug()
+                    else:
+                        freq = self._yaesu_get_freq()
+                        last_raw = b''
                 except Exception:
                     freq = 0
                 if freq:
                     break
-                time.sleep(0.2)
+                time.sleep(0.3)
             if freq:
                 return True, f"Connecté {port} {baudrate}bd — {freq/1e6:.4f} MHz"
-            return True, (f"Connecté {port} {baudrate}bd — ⚠️ pas de réponse radio "
+            if last_raw:
+                hexdump = last_raw.hex(' ')
+                return True, (f"Connecté {port} {baudrate}bd — ⚠️ réponse reçue mais illisible : {hexdump}")
+            return True, (f"Connecté {port} {baudrate}bd — ⚠️ aucun octet reçu de la radio "
                            f"(vérifie baudrate/adresse CI-V/protocole et que le câble CAT est bien relié)")
         except Exception as e: return False,str(e)
 
@@ -26617,18 +26626,31 @@ class RadioController:
         self.serial_port.write(cmd); time.sleep(0.05); self.serial_port.read(10)
 
     def _icom_get_freq(self):
+        freq, _raw = self._icom_get_freq_debug()
+        return freq
+
+    def _icom_get_freq_debug(self):
+        """V8.4.3 F4LPS : identique à _icom_get_freq mais renvoie aussi les
+        octets bruts reçus, pour diagnostiquer un port qui répond avec
+        n'importe quoi (adresse CI-V erronée, écho seul, bruit...) plutôt
+        que de rien recevoir du tout."""
         with self._lock:
             cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x03,0xFD])
-            self.serial_port.reset_input_buffer()
+            try:
+                self.serial_port.reset_input_buffer()
+            except Exception:
+                pass
             self.serial_port.write(cmd); time.sleep(0.35)
             resp=self.serial_port.read(64)
         for i in range(len(resp)-10):
             if resp[i]==0xFE and resp[i+1]==0xFE and resp[i+2]==0xE0 and resp[i+4]==0x03:
                 bcd=resp[i+5:i+10]
                 freq_str="".join(f"{(b>>4)&0xF}{b&0xF}" for b in reversed(bcd))
-                try: f=int(freq_str); return f if 0<f<1000000000 else 0
+                try:
+                    f=int(freq_str)
+                    return (f, resp) if 0<f<1000000000 else (0, resp)
                 except: pass
-        return 0
+        return 0, resp
 
     def _yaesu_get_freq(self):
         self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.2)
