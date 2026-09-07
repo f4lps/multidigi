@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.2"
+PROGRAM_VERSION_TAG = "8.4.3"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -29051,7 +29051,15 @@ class RadioCatWindow(QDialog):
             port  = self._cat_port.currentData() or self._cat_port.currentText().split(" ")[0]
             baud  = int(self._cat_baud.currentText())
             proto = 'icom' if 'Icom' in self._cat_proto.currentText() else 'yaesu'
-            addr  = self._civ.currentText()
+            # V8.4.4 F4LPS : `addr` était le texte affiché du menu déroulant
+            # ("0x94 (IC-7300)") passé tel quel comme adresse CI-V, au lieu
+            # de l'entier 0x94 — chaque commande CI-V envoyée était donc
+            # invalide (bytes([...,"0x94 (IC-7300)",...]) lève une
+            # exception), ce qui explique le silence radio total malgré un
+            # port/câble fonctionnels. On extrait maintenant l'entier hexa,
+            # comme le fait déjà l'autre panneau CAT (_toggle_cat plus bas).
+            at = self._civ.currentText()
+            addr = int(at.split("x")[1].split(" ")[0], 16) if "0x" in at else 0x94
             ok, msg = rc.connect_serial(port, baud, proto, addr)
             if ok:
                 self._cat_status.setText(f"✅ {msg}")
