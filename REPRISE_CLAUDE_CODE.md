@@ -215,11 +215,9 @@ n'ait pas suffi.
 
 ## Points restants à vérifier / améliorer
 
-- **Confirmer avec l'utilisateur, en usage réel prolongé (RX+TX, pas
-  seulement une mesure CPU ponctuelle), que le ralentissement a bien
-  disparu en 8.4.5.** Vérifié techniquement corrigé (CPU) dans cette
-  session, mais pas encore un vrai retour "j'ai utilisé la radio et tout
-  va bien" de l'utilisateur.
+- ~~Confirmer avec l'utilisateur, en usage réel prolongé (RX+TX), que le
+  ralentissement a bien disparu en 8.4.5.~~ **Confirmé par l'utilisateur
+  le 7 sept 2026 : "ça fonctionne bien."** Dossier clos.
 - Vérifier la connexion HRD réelle (l'utilisateur confirme qu'elle
   fonctionne — testé dans cette session via la fenêtre "Logger le QSO" →
   HRD Logbook, semble opérationnel).
