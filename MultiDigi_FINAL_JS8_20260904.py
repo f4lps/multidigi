@@ -26442,20 +26442,25 @@ class RadioController:
             time.sleep(0.3)
             freq = 0
             last_raw = b''
+            last_io_error = None
             for _ in range(4):
                 try:
                     if protocol == 'icom':
                         freq, last_raw = self._icom_get_freq_debug()
+                        last_io_error = self.last_io_error
                     else:
                         freq = self._yaesu_get_freq()
                         last_raw = b''
-                except Exception:
+                except Exception as e:
                     freq = 0
+                    last_io_error = str(e)
                 if freq:
                     break
                 time.sleep(0.3)
             if freq:
                 return True, f"Connecté {port} {baudrate}bd — {freq/1e6:.4f} MHz"
+            if last_io_error:
+                return True, (f"Connecté {port} {baudrate}bd — ⚠️ erreur d'E/S sur le port : {last_io_error}")
             if last_raw:
                 hexdump = last_raw.hex(' ')
                 return True, (f"Connecté {port} {baudrate}bd — ⚠️ réponse reçue mais illisible : {hexdump}")
@@ -26633,15 +26638,27 @@ class RadioController:
         """V8.4.3 F4LPS : identique à _icom_get_freq mais renvoie aussi les
         octets bruts reçus, pour diagnostiquer un port qui répond avec
         n'importe quoi (adresse CI-V erronée, écho seul, bruit...) plutôt
-        que de rien recevoir du tout."""
+        que de rien recevoir du tout.
+        V8.4.4 F4LPS : write()/read() pouvaient lever une exception (port
+        virtuel qui refuse l'écriture, erreur d'accès...) — avant, cette
+        exception remontait à l'appelant et écrasait silencieusement le
+        diagnostic, affichant à tort "aucun octet reçu" au lieu de la vraie
+        erreur d'E/S. On capture maintenant l'erreur et on la renvoie sous
+        forme de texte via self.last_io_error pour l'afficher à l'utilisateur."""
+        self.last_io_error = None
         with self._lock:
             cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x03,0xFD])
             try:
                 self.serial_port.reset_input_buffer()
             except Exception:
                 pass
-            self.serial_port.write(cmd); time.sleep(0.35)
-            resp=self.serial_port.read(64)
+            try:
+                self.serial_port.write(cmd)
+                time.sleep(0.35)
+                resp=self.serial_port.read(64)
+            except Exception as e:
+                self.last_io_error = str(e)
+                return 0, b''
         for i in range(len(resp)-10):
             if resp[i]==0xFE and resp[i+1]==0xFE and resp[i+2]==0xE0 and resp[i+4]==0x03:
                 bcd=resp[i+5:i+10]
