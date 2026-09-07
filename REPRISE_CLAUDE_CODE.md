@@ -2,7 +2,7 @@
 
 ## Fichier à utiliser
 
-`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.4**
+`MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.5**
 (constante `PROGRAM_VERSION_TAG` en haut du fichier).
 
 ## Dépôt GitHub
@@ -25,10 +25,14 @@
     republiée correctement. **Toujours vérifier après publication** avec :
     `curl -s https://api.github.com/repos/f4lps/multidigi/releases/latest`
     (voir tag_name et assets) avant de considérer une release comme bonne.
-  - **`v8.4.4`** (dernière, actuelle) — corrige un ralentissement RX/TX
-    signalé par l'utilisateur, présent uniquement en CAT série direct
-    (jamais en HRD/OmniRig/FLRig). Vérifiée correcte via l'API (tag
-    `v8.4.4`, un seul asset `MultiDigi_Setup_8.4.4.exe` 139 Mo).
+  - **`v8.4.4`** — première tentative de correctif du ralentissement CAT
+    série (verrouillage des accès port + pause du sondage pendant le PTT).
+    Insuffisante : le vrai problème était ailleurs (voir 8.4.5).
+  - **`v8.4.5`** (dernière, actuelle) — corrige la cause réelle du
+    ralentissement RX/TX en CAT série direct (CPU saturé en continu).
+    Vérifiée correcte via l'API (tag `v8.4.5`, un seul asset
+    `MultiDigi_Setup_8.4.5.exe` 139 Mo) et testée en direct sur la machine
+    de l'utilisateur (CPU retombe de ~90% à ~1-2% une fois connecté).
 
 ## ✅ Résolu — CAT série ne remontait pas la fréquence (→ 8.4.3)
 
@@ -42,27 +46,44 @@ le silence total malgré un port/câble/radio fonctionnels. Corrigé en
 extrayant l'entier hexa comme le fait déjà l'autre panneau CAT (celui de
 "Réglages généraux", `_toggle_cat` vers la ligne ~38500).
 
-## ✅ Résolu — Ralentissement RX/TX en CAT série direct (→ 8.4.4)
+## ✅ Résolu — Ralentissement RX/TX en CAT série direct (8.4.4 insuffisante → vraie cause en 8.4.5)
 
 Signalé juste après la 8.4.3 : "ça rame en réception et émission", mais
 confirmé par l'utilisateur comme **spécifique au CAT série direct**
-(jamais avec HRD, qui passe par le réseau). Cause : le thread de sondage
-de fréquence (`_FreqPollThread`, toutes les 3s en tâche de fond) et les
-actions PTT/QSY/changement de mode déclenchées depuis l'interface
-écrivaient toutes sur le même port série sans synchronisation cohérente
-(seule la lecture de fréquence utilisait déjà `RadioController._lock`).
-Corrigé (classe `RadioController` vers la ligne ~26410 et les deux classes
-`_FreqPollThread` vers les lignes ~26374 et ~28652) :
-- Toutes les écritures série (PTT, QSY, USB/CW, Yaesu) passent maintenant
-  par `self._lock`, comme la lecture de fréquence.
-- Nouveau flag `RadioController._tx_active` : levé par `ptt_on` avant
-  l'écriture série, baissé par `ptt_off` dans un `finally`. Le thread de
-  sondage fréquence saute son tour tant que ce flag est actif, pour ne
-  jamais disputer le port avec l'audio TX au moment critique.
+(jamais avec HRD, qui passe par le réseau).
 
-Pas encore reconfirmé en usage réel par l'utilisateur au moment de ce
-point de reprise (juste rebuild + republié) — **prochaine étape : demander
-confirmation que le ralentissement a bien disparu en usage normal.**
+**Tentative 8.4.4 (insuffisante) :** hypothèse initiale = contention entre
+le thread de sondage fréquence (`_FreqPollThread`, toutes les 3s) et les
+actions PTT/QSY/changement de mode, qui écrivaient toutes sur le port
+série sans synchronisation cohérente. Correctifs appliqués (gardés, restent
+corrects et utiles) : toutes les écritures série passent par
+`RadioController._lock`, et un flag `_tx_active` fait sauter le sondage
+fréquence pendant une émission. **N'a pas suffi** : l'utilisateur a
+continué de signaler le ralentissement après mise à jour en 8.4.4.
+
+**Vraie cause trouvée en 8.4.5**, par mesure CPU en direct sur la machine
+de l'utilisateur (accès complet à sa machine dans cette session — toujours
+privilégier une mesure réelle `Get-Process ... CPU` à une hypothèse quand
+c'est possible) : dès que le CAT série est connecté, le processus
+consommait **~90% d'un cœur CPU en continu** (pas des pics ponctuels),
+retombant à ~1-3% à la déconnexion. Cause : `RadioController.
+_icom_get_freq_debug` (et les autres lectures série) appelaient
+`serial_port.read(n)` avec un `timeout` pyserial — mais sur le pont série
+virtuel de l'utilisateur (Eltima), ce timeout n'était visiblement pas
+respecté correctement par le driver, laissant le thread de sondage
+fréquence bloqué dans `read()` bien plus longtemps que prévu, en continu.
+
+Corrigé en remplaçant tous les `serial_port.read(n)` directs (lecture
+fréquence Icom/Yaesu, confirmation d'écriture fréquence) par une nouvelle
+méthode `RadioController._read_with_deadline(max_bytes, deadline_s)`
+(classe `RadioController`, juste avant `_icom_get_freq`) : sonde
+`serial_port.in_waiting` nous-mêmes avec de petites pauses (`time.sleep
+(0.02)`) jusqu'à un délai maximum fixé côté code, sans jamais dépendre du
+timeout interne (potentiellement cassé) du driver pour ce port précis.
+
+**Confirmé corrigé** par mesure directe avant publication : CPU retombe à
+~1-2% avec le CAT connecté, aussi bien sur la source Python que sur
+l'exécutable compilé 8.4.5.
 
 ## Fonctionnalités ajoutées / corrigées lors des sessions précédentes (4-7 sept 2026)
 
@@ -173,6 +194,18 @@ d'environ 614 Mo à 442 Mo.
    → contrôler `tag_name` (doit correspondre exactement) et `assets`
    (un seul fichier, le bon installeur, la bonne taille).
 
+## Astuce diagnostic (utile pour les prochaines sessions)
+
+Cette session tourne **directement sur la machine de l'utilisateur**
+(F4LPS) — accès complet PowerShell/Bash. Pour un problème de performance
+ou de comportement runtime, **mesurer en direct plutôt que deviner** :
+`Get-Process -Name MultiDigi | Select CPU, Threads` avant/après une action
+(ex. connecter/déconnecter le CAT) donne une réponse factuelle en
+quelques secondes, bien plus fiable qu'une hypothèse de code lue en
+diagonale. Ça a permis de trouver la vraie cause du ralentissement CAT
+(8.4.5) après qu'une première hypothèse plausible mais fausse (8.4.4)
+n'ait pas suffi.
+
 ## Sécurité radio (toujours valable)
 
 - Ne jamais lancer automatiquement un test qui commande le PTT.
@@ -182,8 +215,11 @@ d'environ 614 Mo à 442 Mo.
 
 ## Points restants à vérifier / améliorer
 
-- **Confirmer que le correctif de ralentissement RX/TX (8.4.4) résout bien
-  le problème en usage réel** (voir section dédiée ci-dessus).
+- **Confirmer avec l'utilisateur, en usage réel prolongé (RX+TX, pas
+  seulement une mesure CPU ponctuelle), que le ralentissement a bien
+  disparu en 8.4.5.** Vérifié techniquement corrigé (CPU) dans cette
+  session, mais pas encore un vrai retour "j'ai utilisé la radio et tout
+  va bien" de l'utilisateur.
 - Vérifier la connexion HRD réelle (l'utilisateur confirme qu'elle
   fonctionne — testé dans cette session via la fenêtre "Logger le QSO" →
   HRD Logbook, semble opérationnel).
