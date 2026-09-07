@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.1"
+PROGRAM_VERSION_TAG = "8.4.2"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26422,8 +26422,36 @@ class RadioController:
             if self.serial_port and self.serial_port.is_open: self.serial_port.close()
             self.serial_port=serial.Serial(port=port,baudrate=baudrate,
                 bytesize=8,parity='N',stopbits=1,timeout=1,write_timeout=1)
+            # V8.4.2 F4LPS : de nombreux adaptateurs USB-CI-V/CAT (et ports
+            # série virtuels type Eltima) exigent DTR/RTS actifs pour
+            # alimenter le circuit ou établir la liaison — sans ça, le port
+            # Windows s'ouvre normalement (donc "connecté") mais la radio ne
+            # répond jamais aux requêtes, y compris la lecture de fréquence.
+            try:
+                self.serial_port.dtr = True
+                self.serial_port.rts = True
+            except Exception:
+                pass
             self.connection_type='serial'; self.protocol=protocol; self.civ_address=civ_address
-            return True,f"Connecté {port} {baudrate}bd"
+            # V8.4.2 F4LPS : le port pouvait s'ouvrir sans que la radio ne
+            # réponde réellement (mauvais baudrate, mauvaise adresse CI-V,
+            # câble/port non relié à la radio) — "connecté" ne voulait alors
+            # rien dire de fiable. On vérifie ici par une vraie lecture de
+            # fréquence, avec deux essais (le premier échange après ouverture
+            # du port est parfois perdu sur les ports virtuels).
+            freq = 0
+            for _ in range(2):
+                try:
+                    freq = self._icom_get_freq() if protocol == 'icom' else self._yaesu_get_freq()
+                except Exception:
+                    freq = 0
+                if freq:
+                    break
+                time.sleep(0.2)
+            if freq:
+                return True, f"Connecté {port} {baudrate}bd — {freq/1e6:.4f} MHz"
+            return True, (f"Connecté {port} {baudrate}bd — ⚠️ pas de réponse radio "
+                           f"(vérifie baudrate/adresse CI-V/protocole et que le câble CAT est bien relié)")
         except Exception as e: return False,str(e)
 
     def connect_omnirig(self, rig_number=1):
@@ -26592,7 +26620,7 @@ class RadioController:
         with self._lock:
             cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x03,0xFD])
             self.serial_port.reset_input_buffer()
-            self.serial_port.write(cmd); time.sleep(0.25)
+            self.serial_port.write(cmd); time.sleep(0.35)
             resp=self.serial_port.read(64)
         for i in range(len(resp)-10):
             if resp[i]==0xFE and resp[i+1]==0xFE and resp[i+2]==0xE0 and resp[i+4]==0x03:
@@ -26603,7 +26631,7 @@ class RadioController:
         return 0
 
     def _yaesu_get_freq(self):
-        self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.1)
+        self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.2)
         resp=self.serial_port.read(5)
         if len(resp)<5: return 0
         freq=0
