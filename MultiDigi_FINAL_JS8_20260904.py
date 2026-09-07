@@ -26390,7 +26390,10 @@ class _FreqPollThread(QThread):
 
     def run(self):
         while self._running:
-            if self._rc.connected:
+            # V8.4.4 F4LPS : on saute le sondage pendant une émission (PTT
+            # actif) pour ne pas disputer le port série avec le CAT/l'audio
+            # TX — cause du ralentissement RX/TX en CAT série direct.
+            if self._rc.connected and not getattr(self._rc, '_tx_active', False):
                 try:
                     freq = self._rc.get_frequency()
                     if freq and freq > 0:
@@ -26412,6 +26415,13 @@ class RadioController:
         self.protocol='icom'; self.civ_address=0x94
         self._lock=threading.Lock()
         self.omnirig=None; self.rig=None
+        # V8.4.4 F4LPS : levé pendant toute la durée d'une émission CAT
+        # série directe, pour que le thread de polling fréquence (toutes
+        # les 3s, en tâche de fond) se mette en pause plutôt que de se
+        # disputer le port avec le PTT/l'audio — cause du ralentissement
+        # RX/TX signalé en connexion série directe (absent en HRD, qui
+        # passe par le réseau et n'a donc pas cette contention de port).
+        self._tx_active=False
 
     @property
     def connected(self): return self.connection_type is not None
@@ -26551,6 +26561,10 @@ class RadioController:
 
     def ptt_on(self):
         if not self.connected: return
+        # V8.4.4 F4LPS : signalé AVANT l'écriture série pour que le thread
+        # de polling fréquence saute son prochain tour sans même tenter le
+        # verrou (voir _tx_active dans __init__).
+        self._tx_active = True
         try:
             if self.connection_type == 'omnirig' and self.rig:
                 self.rig.Tx = 1; return
@@ -26559,13 +26573,14 @@ class RadioController:
                 if c: c.ptt_on(); return
             if self.connection_type == 'flrig':
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(1,)); return
-            if self.protocol=='icom':
-                self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x01,0xFD]))
-            else:
-                # V8.4.1 F4LPS : PTT Yaesu (protocole CAT 5 octets) manquait —
-                # la fréquence se lisait mais l'émission ne partait jamais
-                # en connexion série directe (hors OmniRig/HRD/FLRig).
-                self._yaesu_ptt_on()
+            with self._lock:
+                if self.protocol=='icom':
+                    self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x01,0xFD]))
+                else:
+                    # V8.4.1 F4LPS : PTT Yaesu (protocole CAT 5 octets) manquait —
+                    # la fréquence se lisait mais l'émission ne partait jamais
+                    # en connexion série directe (hors OmniRig/HRD/FLRig).
+                    self._yaesu_ptt_on()
         except: pass
 
     def ptt_off(self):
@@ -26578,11 +26593,15 @@ class RadioController:
                 if c: c.ptt_off(); return
             if self.connection_type == 'flrig':
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(0,)); return
-            if self.protocol=='icom':
-                self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x00,0xFD]))
-            else:
-                self._yaesu_ptt_off()
-        except: pass
+            with self._lock:
+                if self.protocol=='icom':
+                    self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x00,0xFD]))
+                else:
+                    self._yaesu_ptt_off()
+        finally:
+            # V8.4.4 F4LPS : reprise du polling fréquence dans tous les cas,
+            # même si l'écriture série a levé une exception.
+            self._tx_active = False
 
     def set_mode_usb(self):
         """Passe la radio en USB via la connexion CAT active."""
@@ -26603,10 +26622,11 @@ class RadioController:
                 return True
             if self.protocol == 'icom':
                 # CI-V 06 01 = USB.
-                self.serial_port.write(bytes([
-                    0xFE, 0xFE, self.civ_address, 0xE0,
-                    0x06, 0x01, 0xFD
-                ]))
+                with self._lock:
+                    self.serial_port.write(bytes([
+                        0xFE, 0xFE, self.civ_address, 0xE0,
+                        0x06, 0x01, 0xFD
+                    ]))
                 return True
         except Exception:
             pass
@@ -26631,10 +26651,11 @@ class RadioController:
                 return True
             if self.protocol == 'icom':
                 # CI-V 06 03 = CW.
-                self.serial_port.write(bytes([
-                    0xFE, 0xFE, self.civ_address, 0xE0,
-                    0x06, 0x03, 0xFD
-                ]))
+                with self._lock:
+                    self.serial_port.write(bytes([
+                        0xFE, 0xFE, self.civ_address, 0xE0,
+                        0x06, 0x03, 0xFD
+                    ]))
                 return True
         except Exception:
             pass
@@ -26661,7 +26682,8 @@ class RadioController:
         for i in range(4,-1,-1):
             pos=i*2; bcd.append((int(freq_str[pos])<<4)|int(freq_str[pos+1]))
         cmd=bytes([0xFE,0xFE,self.civ_address,0xE0,0x05])+bytes(bcd)+bytes([0xFD])
-        self.serial_port.write(cmd); time.sleep(0.05); self.serial_port.read(10)
+        with self._lock:
+            self.serial_port.write(cmd); time.sleep(0.05); self.serial_port.read(10)
 
     def _icom_get_freq(self):
         freq, _raw = self._icom_get_freq_debug()
@@ -26703,8 +26725,9 @@ class RadioController:
         return 0, resp
 
     def _yaesu_get_freq(self):
-        self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.2)
-        resp=self.serial_port.read(5)
+        with self._lock:
+            self.serial_port.write(bytes([0,0,0,0,3])); time.sleep(0.2)
+            resp=self.serial_port.read(5)
         if len(resp)<5: return 0
         freq=0
         for b in resp[:4]: freq=freq*100+(b>>4)*10+(b&0xF)
@@ -26716,7 +26739,8 @@ class RadioController:
         val = int(round(freq_hz / 10.0))
         s = f"{val:08d}"
         bcd = bytes((int(s[i]) << 4) | int(s[i+1]) for i in range(0, 8, 2))
-        self.serial_port.write(bcd + bytes([0x01]))
+        with self._lock:
+            self.serial_port.write(bcd + bytes([0x01]))
 
     def _yaesu_ptt_on(self):
         """CAT Yaesu 5 octets : commande 0x0F, P1=0x00 -> TX ON."""
@@ -28660,7 +28684,7 @@ class _FreqPollThread(QThread):
 
     def run(self):
         while self._running:
-            if self._rc.connected:
+            if self._rc.connected and not getattr(self._rc, '_tx_active', False):
                 try:
                     freq=self._rc.get_frequency()
                     if freq and freq>0: self.freq_ready.emit(int(freq))
