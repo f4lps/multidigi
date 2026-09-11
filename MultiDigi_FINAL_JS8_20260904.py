@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.6"
+PROGRAM_VERSION_TAG = "8.4.7"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26426,7 +26426,7 @@ class RadioController:
     @property
     def connected(self): return self.connection_type is not None
 
-    def connect_serial(self, port, baudrate=19200, protocol='icom', civ_address=0x94, cw_port_name=None):
+    def connect_serial(self, port, baudrate=19200, protocol='icom', civ_address=0x94, cw_port_name=None, force_dtr_rts=False):
         if not SERIAL_AVAILABLE: return False,"pyserial non disponible"
         try:
             if self.serial_port and self.serial_port.is_open: self.serial_port.close()
@@ -26437,11 +26437,23 @@ class RadioController:
             # alimenter le circuit ou établir la liaison — sans ça, le port
             # Windows s'ouvre normalement (donc "connecté") mais la radio ne
             # répond jamais aux requêtes, y compris la lecture de fréquence.
-            try:
-                self.serial_port.dtr = True
-                self.serial_port.rts = True
-            except Exception:
-                pass
+            # V8.4.7 F4LPS : ⚠️ DANGER SÉCURITÉ — ce forçage automatique et
+            # systématique de RTS=True mettait certaines radios Yaesu en
+            # ÉMISSION (porteuse bloquée) dès la connexion CAT, hors de tout
+            # contrôle logiciel : sur de nombreux câbles/interfaces CAT+PTT
+            # pour Yaesu, la ligne RTS est câblée directement sur le PTT
+            # matériel du transceiver (signalé par un utilisateur : porteuse
+            # émise dès le clic sur CONNECTER, sans lien avec le protocole
+            # CAT choisi). Ce n'est plus automatique : uniquement si demandé
+            # explicitement (case à cocher, pour les adaptateurs Icom qui en
+            # ont réellement besoin), jamais par défaut, et jamais pour
+            # Yaesu quel que soit le réglage.
+            if force_dtr_rts and protocol == 'icom':
+                try:
+                    self.serial_port.dtr = True
+                    self.serial_port.rts = True
+                except Exception:
+                    pass
             self.connection_type='serial'; self.protocol=protocol; self.civ_address=civ_address
             # V8.4.3 F4LPS : sur certains ports virtuels (Eltima...), le pont
             # met un instant à s'établir juste après l'ouverture — un premier
@@ -29004,10 +29016,24 @@ class RadioCatWindow(QDialog):
         # par le code Yaesu (civ_addr n'intervient que dans le chemin Icom),
         # mais rien ne l'indiquait à l'écran. On le masque maintenant dès
         # que "Yaesu CAT" est sélectionné.
+        self._force_dtr_rts_chk = QCheckBox("⚠️ Forcer DTR/RTS actifs (certains adaptateurs Icom uniquement)")
+        self._force_dtr_rts_chk.setStyleSheet("color:#ffaa44;font-size:8pt;")
+        self._force_dtr_rts_chk.setToolTip(
+            "À ne cocher que si la fréquence ne remonte jamais en Icom CI-V.\n"
+            "⚠️ NE JAMAIS cocher en Yaesu : sur de nombreux câbles CAT+PTT\n"
+            "Yaesu, RTS est câblé directement sur le PTT matériel — l'activer\n"
+            "met la radio en émission dès la connexion, hors de tout contrôle."
+        )
+        self._force_dtr_rts_chk.setChecked(bool(_cs.get('force_dtr_rts', False)))
+        gl.addWidget(self._force_dtr_rts_chk, 4,0,1,2)
+
         def _sync_civ_visibility():
             is_icom = 'Icom' in self._cat_proto.currentText()
             self._civ_lbl.setVisible(is_icom)
             self._civ.setVisible(is_icom)
+            self._force_dtr_rts_chk.setVisible(is_icom)
+            if not is_icom:
+                self._force_dtr_rts_chk.setChecked(False)
         self._cat_proto.currentIndexChanged.connect(lambda _=None: _sync_civ_visibility())
         _sync_civ_visibility()
 
@@ -29211,7 +29237,8 @@ class RadioCatWindow(QDialog):
             # comme le fait déjà l'autre panneau CAT (_toggle_cat plus bas).
             at = self._civ.currentText()
             addr = int(at.split("x")[1].split(" ")[0], 16) if "0x" in at else 0x94
-            ok, msg = rc.connect_serial(port, baud, proto, addr)
+            force_dtr_rts = bool(self._force_dtr_rts_chk.isChecked()) and proto == 'icom'
+            ok, msg = rc.connect_serial(port, baud, proto, addr, force_dtr_rts=force_dtr_rts)
             if ok:
                 self._cat_status.setText(f"✅ {msg}")
                 self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
@@ -29221,7 +29248,8 @@ class RadioCatWindow(QDialog):
                 try:
                     cs = dict(getattr(self.main, '_cat_settings', {}) or {})
                     cs.update({'port': port, 'baud': self._cat_baud.currentText(),
-                               'protocol': proto, 'civ': self._civ.currentText()})
+                               'protocol': proto, 'civ': self._civ.currentText(),
+                               'force_dtr_rts': force_dtr_rts})
                     self.main._cat_settings = cs
                     self.main._save_settings()
                 except Exception:
