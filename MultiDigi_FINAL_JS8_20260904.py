@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.5"
+PROGRAM_VERSION_TAG = "8.4.6"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26458,6 +26458,9 @@ class RadioController:
                         if protocol == 'icom':
                             f, raw = self._icom_get_freq_debug()
                             ioerr = self.last_io_error
+                        elif protocol == 'yaesu_ascii':
+                            f = self._yaesu_ascii_get_freq()
+                            raw = b''
                         else:
                             f = self._yaesu_get_freq()
                             raw = b''
@@ -26507,8 +26510,9 @@ class RadioController:
             if last_raw:
                 hexdump = last_raw.hex(' ')
                 return True, (f"Connecté {port} {baudrate}bd — ⚠️ réponse reçue mais illisible : {hexdump} ({dtr_rts_note})")
+            _hint = "adresse CI-V/protocole" if protocol == 'icom' else "protocole (CAT ancien vs ASCII)"
             return True, (f"Connecté {port} {baudrate}bd — ⚠️ aucun octet reçu de la radio "
-                           f"(vérifie baudrate/adresse CI-V/protocole et que le câble CAT est bien relié) — {dtr_rts_note}")
+                           f"(vérifie baudrate/{_hint} et que le câble CAT est bien relié) — {dtr_rts_note}")
         except Exception as e: return False,str(e)
 
     def connect_omnirig(self, rig_number=1):
@@ -26538,6 +26542,7 @@ class RadioController:
                 freq = self._flrig_call('rig.get_vfoA', 'main.get_frequency')
                 return int(float(freq)) if freq is not None else 0
             if self.protocol=='icom': return self._icom_get_freq()
+            elif self.protocol=='yaesu_ascii': return self._yaesu_ascii_get_freq()
             else: return self._yaesu_get_freq()
         except: return 0
 
@@ -26554,6 +26559,8 @@ class RadioController:
                 return True
             if self.protocol=='icom':
                 self._icom_set_freq(int(freq_hz))
+            elif self.protocol=='yaesu_ascii':
+                self._yaesu_ascii_set_freq(int(freq_hz))
             else:
                 self._yaesu_set_freq(int(freq_hz))
             return True
@@ -26576,6 +26583,8 @@ class RadioController:
             with self._lock:
                 if self.protocol=='icom':
                     self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x01,0xFD]))
+                elif self.protocol=='yaesu_ascii':
+                    self._yaesu_ascii_ptt_on()
                 else:
                     # V8.4.1 F4LPS : PTT Yaesu (protocole CAT 5 octets) manquait —
                     # la fréquence se lisait mais l'émission ne partait jamais
@@ -26596,6 +26605,8 @@ class RadioController:
             with self._lock:
                 if self.protocol=='icom':
                     self.serial_port.write(bytes([0xFE,0xFE,self.civ_address,0xE0,0x1C,0x00,0x00,0xFD]))
+                elif self.protocol=='yaesu_ascii':
+                    self._yaesu_ascii_ptt_off()
                 else:
                     self._yaesu_ptt_off()
         finally:
@@ -26777,6 +26788,64 @@ class RadioController:
     def _yaesu_ptt_off(self):
         """CAT Yaesu 5 octets : commande 0x0F, P1=0x80 -> TX OFF (RX)."""
         self.serial_port.write(bytes([0x80, 0, 0, 0, 0x0F]))
+
+    # ── Yaesu CAT ASCII (FT-891, FT-991A, FTDX10, FTDX101, FT-710...) ──────
+    # V8.4.6 F4LPS : ces radios n'utilisent PAS l'ancien CAT binaire 5
+    # octets ci-dessus (FT-847/857/897/100) mais un CAT texte type Kenwood,
+    # commandes terminées par ';'. Signalé par un utilisateur en FT-891/991
+    # dont la connexion échouait systématiquement avec l'ancien protocole.
+    def _yaesu_ascii_read_line(self, deadline_s):
+        """Lit jusqu'au ';' de fin de trame, avec la même technique de
+        sondage in_waiting que _read_with_deadline (voir plus haut) — évite
+        de dépendre du timeout du driver, potentiellement mal respecté sur
+        certains ports/adaptateurs virtuels."""
+        deadline = time.time() + deadline_s
+        buf = b''
+        while time.time() < deadline:
+            try:
+                n = self.serial_port.in_waiting
+            except Exception:
+                n = 0
+            if n:
+                try:
+                    buf += self.serial_port.read(n)
+                except Exception:
+                    break
+                if b';' in buf:
+                    return buf.split(b';', 1)[0] + b';'
+            else:
+                time.sleep(0.02)
+        return buf
+
+    def _yaesu_ascii_get_freq(self):
+        with self._lock:
+            try:
+                self.serial_port.reset_input_buffer()
+            except Exception:
+                pass
+            self.serial_port.write(b'FA;')
+            resp = self._yaesu_ascii_read_line(0.6)
+        # Réponse attendue : b'FA' + 8 ou 9 chiffres (Hz) + b';'
+        if not resp.startswith(b'FA') or b';' not in resp:
+            return 0
+        digits = resp[2:].split(b';')[0]
+        try:
+            return int(digits)
+        except Exception:
+            return 0
+
+    def _yaesu_ascii_set_freq(self, freq_hz):
+        cmd = f"FA{int(freq_hz):09d};".encode('ascii')
+        with self._lock:
+            self.serial_port.write(cmd)
+
+    def _yaesu_ascii_ptt_on(self):
+        """TX1; = émission (micro/CAT) sur le CAT ASCII Yaesu moderne."""
+        self.serial_port.write(b'TX1;')
+
+    def _yaesu_ascii_ptt_off(self):
+        """RX; = retour réception."""
+        self.serial_port.write(b'RX;')
 
 
 
@@ -28904,12 +28973,21 @@ class RadioCatWindow(QDialog):
 
         gl.addWidget(self._lbl("Protocole :"),    2,0)
         self._cat_proto = QComboBox()
-        self._cat_proto.addItems(['Icom CI-V','Yaesu CAT'])
-        if str(_cs.get('protocol', '')) == 'yaesu':
-            self._cat_proto.setCurrentText('Yaesu CAT')
+        # V8.4.6 F4LPS : "Yaesu CAT" (le CAT binaire 5 octets historique,
+        # FT-847/857/897/100) ne fonctionne pas sur les Yaesu récents
+        # (FT-891, FT-991A, FTDX10, FTDX101, FT-710...), qui utilisent un
+        # CAT ASCII type Kenwood ("FA...;", "TX1;"/"RX;") — signalé par un
+        # utilisateur en FT-891/991 : connexion refusée, PTT erratique.
+        self._cat_proto.addItems(['Icom CI-V','Yaesu CAT (ancien, FT-847/857/897)','Yaesu CAT ASCII (FT-891/991/FTDX/710)'])
+        _saved_proto = str(_cs.get('protocol', ''))
+        if _saved_proto == 'yaesu':
+            self._cat_proto.setCurrentText('Yaesu CAT (ancien, FT-847/857/897)')
+        elif _saved_proto == 'yaesu_ascii':
+            self._cat_proto.setCurrentText('Yaesu CAT ASCII (FT-891/991/FTDX/710)')
         gl.addWidget(self._cat_proto, 2,1)
 
-        gl.addWidget(self._lbl("CI-V Adresse :"), 3,0)
+        self._civ_lbl = self._lbl("CI-V Adresse :")
+        gl.addWidget(self._civ_lbl, 3,0)
         self._civ = QComboBox()
         for a in ['0x94 (IC-7300)','0x98 (IC-7610)','0x70 (IC-7100)','0xA2 (IC-705)','0x90 (IC-9700)']:
             self._civ.addItem(a)
@@ -28918,6 +28996,20 @@ class RadioCatWindow(QDialog):
             if _ci >= 0:
                 self._civ.setCurrentIndex(_ci)
         gl.addWidget(self._civ, 3,1)
+
+        # V8.4.6 F4LPS : le champ "CI-V Adresse" (spécifique Icom) restait
+        # visible et rempli ("0x94 (IC-7300)") même quand "Yaesu CAT" était
+        # sélectionné — source de confusion signalée par un utilisateur
+        # ("il y a le protocole Icom dedans Yaesu"). Il n'était pas utilisé
+        # par le code Yaesu (civ_addr n'intervient que dans le chemin Icom),
+        # mais rien ne l'indiquait à l'écran. On le masque maintenant dès
+        # que "Yaesu CAT" est sélectionné.
+        def _sync_civ_visibility():
+            is_icom = 'Icom' in self._cat_proto.currentText()
+            self._civ_lbl.setVisible(is_icom)
+            self._civ.setVisible(is_icom)
+        self._cat_proto.currentIndexChanged.connect(lambda _=None: _sync_civ_visibility())
+        _sync_civ_visibility()
 
         self._btn_cat = QPushButton("🔗 CONNECTER")
         self._btn_cat.setStyleSheet(
@@ -29042,7 +29134,8 @@ class RadioCatWindow(QDialog):
         except Exception as e:
             self._cat_status.setText(f"❌ {e}")
             return
-        proto = 'icom' if 'Icom' in self._cat_proto.currentText() else 'yaesu'
+        _proto_txt = self._cat_proto.currentText()
+        proto = 'icom' if 'Icom' in _proto_txt else ('yaesu_ascii' if 'ASCII' in _proto_txt else 'yaesu')
         baud = int(self._cat_baud.currentText())
         civ_txt = self._civ.currentText()
         civ_addr = int(civ_txt.split('x')[1].split(' ')[0], 16) if '0x' in civ_txt else 0x94
@@ -29068,6 +29161,11 @@ class RadioCatWindow(QDialog):
                             resp[i] == 0xFE and resp[i+1] == 0xFE and resp[i+2] == 0xE0 and resp[i+4] == 0x03
                             for i in range(max(0, len(resp) - 10))
                         )
+                    elif proto == 'yaesu_ascii':
+                        sp.write(b'FA;')
+                        time.sleep(0.2)
+                        resp = sp.read(30)
+                        ok = resp.startswith(b'FA') and b';' in resp
                     else:
                         sp.write(bytes([0, 0, 0, 0, 3]))
                         time.sleep(0.2)
@@ -29089,7 +29187,7 @@ class RadioCatWindow(QDialog):
             self._cat_status.setText(f"✅ Radio détectée sur {found} — clique CONNECTER")
             self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
         else:
-            self._cat_status.setText("❌ Aucune radio trouvée (vérifie protocole/baudrate/CI-V)")
+            self._cat_status.setText("❌ Aucune radio trouvée (vérifie protocole/baudrate" + (" /CI-V" if proto == 'icom' else "") + ")")
             self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
 
     def _toggle_cat(self):
@@ -29102,7 +29200,8 @@ class RadioCatWindow(QDialog):
         else:
             port  = self._cat_port.currentData() or self._cat_port.currentText().split(" ")[0]
             baud  = int(self._cat_baud.currentText())
-            proto = 'icom' if 'Icom' in self._cat_proto.currentText() else 'yaesu'
+            _proto_txt = self._cat_proto.currentText()
+            proto = 'icom' if 'Icom' in _proto_txt else ('yaesu_ascii' if 'ASCII' in _proto_txt else 'yaesu')
             # V8.4.4 F4LPS : `addr` était le texte affiché du menu déroulant
             # ("0x94 (IC-7300)") passé tel quel comme adresse CI-V, au lieu
             # de l'entier 0x94 — chaque commande CI-V envoyée était donc
