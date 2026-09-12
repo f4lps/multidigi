@@ -59,6 +59,12 @@ Au premier lancement, ouvre **⚙ Réglages généraux** pour renseigner ton
 indicatif, ton locator, tes réglages audio RX/TX, et éventuellement tes
 identifiants HamQTH/QRZ/eQSL (stockés uniquement en local, jamais publiés).
 
+## Configurer la radio (CAT) et HRD
+
+Pour régler la connexion CAT avec ta radio Icom ou Yaesu (câble direct)
+ou via Ham Radio Deluxe (pilotage + log automatique), suis le guide
+[CAT_SETUP.md](CAT_SETUP.md).
+
 ## Sécurité radio
 
 - Les automatismes (réseau HB, ACK) sont **désactivés par défaut** et le
