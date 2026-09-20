@@ -176,10 +176,11 @@ radio ignore l'audio : elle passe en émission **sans envoyer de morse**). **USB
 MultiDigi ne change le mode que s'il peut **vérifier** le résultat : liaison CI-V (Icom), OmniRig ou FLRig. Avec HRD
 seul (sans liaison CI-V), il **ne touche pas** au mode : passe la radio en USB toi-même.
 
-**2. CW par le manipulateur de la radio** (décoché par défaut, Icom uniquement)
+**2. CW par le manipulateur de la radio** (coché par défaut, Icom uniquement)
 Le texte est confié au **manipulateur interne de la radio** (CI-V `0x17`), comme CW Terminal : c'est la radio qui
 fabrique le morse. Il faut :
-- une radio **Icom**, en **CW** avec **BK-IN** activé (MultiDigi passe la radio en CW et vérifie qu'elle l'a fait) ;
+- une radio **Icom**, avec **BK-IN** activé (MultiDigi le vérifie ; sinon il envoie en audio) : MultiDigi passe la radio
+  en CW et vérifie qu'elle l'a fait ;
 - avec la connexion série directe : rien d'autre ;
 - avec HRD, FLRig ou OmniRig : le **Port COM du panneau RADIO CAT** doit être un port CI-V **libre** qui va vers la
   radio (par exemple le port auxiliaire de Win4Icom), **pas** le port que HRD tient déjà.

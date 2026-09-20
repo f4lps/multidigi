@@ -27473,6 +27473,29 @@ class RadioController:
             pass
         return ''
 
+    @staticmethod
+    def civ_read_breakin(sp, civ, wait=0.5):
+        """Break-in de la radio (CI-V 16 47) : 0 = désactivé, 1 = semi, 2 = full, None = pas de réponse (ne bloque rien)."""
+        try:
+            sp.reset_input_buffer()
+            sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x16, 0x47, 0xFD]))
+            sp.flush()
+            end = time.time() + wait
+            r = b''
+            while time.time() < end and len(r) < 64:
+                n = getattr(sp, 'in_waiting', 0)
+                if n:
+                    r += sp.read(min(n, 64 - len(r)))
+                    for i in range(len(r) - 6):
+                        if r[i] == 0xFE and r[i + 1] == 0xFE and r[i + 2] == 0xE0 and r[i + 3] == civ \
+                                and r[i + 4] == 0x16 and r[i + 5] == 0x47:
+                            return r[i + 6]
+                else:
+                    time.sleep(0.02)
+        except Exception:
+            pass
+        return None
+
     def civ_set_mode(self, want, sp=None, civ=None):
         """Change le mode par CI-V (06 01 = USB, 06 03 = CW) puis RELIT le mode pour vérifier.
         Retourne True seulement si la radio confirme. `sp`/`civ` : port et adresse ; par défaut la liaison CW."""
@@ -29984,7 +30007,7 @@ class RadioCatWindow(QDialog):
             "\nIcom uniquement. Avec HRD / FLRig / OmniRig : le Port COM ci-dessus doit être un port CI-V"
             "\nlibre qui va vers la radio (ex. port auxiliaire de Win4Icom), pas le port tenu par HRD."
             "\nLa radio doit être en CW avec BK-IN activé. Décoché : le CW part en audio (radio en USB).")
-        self._chk_native_cw.setChecked(bool(_cs.get('native_cw', False)))
+        self._chk_native_cw.setChecked(bool(_cs.get('native_cw', True)))
         ol.addWidget(self._chk_native_cw)
         def _save_opts(_=None):
             try:
@@ -36806,7 +36829,7 @@ class PSKMainWindow(QMainWindow):
         rc = self.radio_ctrl
         if rc.cw_link():
             return True, ''
-        if not self._opt('native_cw', False):
+        if not self._opt('native_cw', True):
             return False, "CW par le manipulateur non activé"
         cs = dict(getattr(self, '_cat_settings', {}) or {})
         if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom' \
@@ -36874,11 +36897,16 @@ class PSKMainWindow(QMainWindow):
         """CW par le manipulateur de la radio possible ? Seulement si l'option est cochée, la radio répond en CI-V et
         est CONFIRMÉE en mode CW. Sinon False (le CW part en audio, comme avant)."""
         rc = getattr(self, 'radio_ctrl', None)
-        if rc is None or not getattr(rc, 'connected', False) or not self._opt('native_cw', False):
+        if rc is None or not getattr(rc, 'connected', False) or not self._opt('native_cw', True):
             return False
         ok, msg = self._open_civ_aux()
         if not ok:
             self._set_status("⚠️ CW par la radio indisponible : " + msg + " — CW en audio")
+            return False
+        link = self.radio_ctrl.cw_link()
+        if link and RadioController.civ_read_breakin(link[0], link[1]) == 0:
+            self._radio_log("BK-IN désactivé sur la radio : CW natif impossible, repli audio")
+            self._set_status("⚠️ BK-IN désactivé sur la radio (le manipulateur n'émettrait pas) : active BK-IN, ou le CW part en audio")
             return False
         if self._set_radio_mode('CW') is not True:
             self._set_status("⚠️ La radio n'a pas confirmé le mode CW : envoi en audio")
@@ -36895,7 +36923,7 @@ class PSKMainWindow(QMainWindow):
             if getattr(self, '_tx_active', False):
                 return
             fam = fam or getattr(self, '_family', '')
-            if fam == 'CW' and self._opt('native_cw', False):
+            if fam == 'CW' and self._opt('native_cw', True):
                 self._cw_native_prepare()
                 return
             res = self._set_radio_mode('USB')

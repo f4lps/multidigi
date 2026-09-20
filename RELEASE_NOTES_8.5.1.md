@@ -9,12 +9,12 @@ qu'elle ne puisse vérifier, et redevient comme avant sinon.
   - *Corriger le mode radio automatiquement* (coché) : ramène en USB une radio en CW, AM, FM ou RTTY, **seulement si la
     radio confirme** (liaison CI-V, OmniRig, FLRig). USB, LSB et DATA ne sont jamais modifiés. Avec HRD seul, MultiDigi ne
     touche plus au mode.
-  - *CW par le manipulateur de la radio* (**décoché** par défaut, Icom) : à cocher si tu veux le morse fabriqué par la radio.
-- Le **port du panneau RADIO CAT n'est plus ouvert de lui-même** (il pouvait être un autre appareil) ; il ne l'est que si
-  l'option CW par le manipulateur est cochée.
+  - *CW par le manipulateur de la radio* (coché, Icom) : le morse est fabriqué par la radio si elle répond en CI-V, est
+    confirmée en CW et a **BK-IN** activé (vérifié) ; sinon le CW part en audio.
+- Le port du panneau RADIO CAT n'est ouvert que si l'option CW par le manipulateur est cochée, et un échec n'est plus retenté
+  pendant 60 s.
 - Si la radio est en CW et ne peut pas être passée en USB, l'émission audio est **refusée avec un message clair** au lieu de
   passer en émission sans morse.
-- Une liaison CI-V en échec n'est plus retentée pendant 60 s (plus de blocages de l'interface).
 - Journal `multidigi_radio.log` (dossier utilisateur) : ce que MultiDigi a décidé pour le mode radio et le CW.
 
 ## Rappel 8.5.0

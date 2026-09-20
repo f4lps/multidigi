@@ -35,8 +35,8 @@ FSK/PSK réels).
 - Vérificateur de mise à jour intégré (onglet À propos)
 - **CW FIT** : décodeur CW par ajustement du modèle de timing Morse — bien meilleur sur signaux
   faibles, QSB (fading) et manipulation à la main, silencieux sur du bruit
-- **CW envoyé par le manipulateur de la radio** (Icom, CI-V 0x17) comme CW Terminal — **option à cocher** dans
-  RADIO CAT (« CW par le manipulateur de la radio »), sinon le CW part en audio comme avant
+- **CW envoyé par le manipulateur de la radio** (Icom, CI-V 0x17) comme CW Terminal — option dans
+  RADIO CAT (« CW par le manipulateur de la radio », cochée) ; sinon, ou si la radio ne répond pas, le CW part en audio
 - **Mode radio corrigé automatiquement, seulement si la radio le confirme** : une radio en CW, AM, FM ou RTTY est
   ramenée en USB pour les modes audio ; USB, LSB et DATA ne sont jamais modifiés
 - **Décodage CW plus lisible** : séparation des mots adaptée à l'espacement de l'opérateur, lettres collées
