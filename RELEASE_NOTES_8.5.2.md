@@ -10,6 +10,11 @@ partir par la radio.
 - Toujours : carte sans accélération GPU, journal `multidigi_crash.log`.
 
 ## CW / mode radio
+- **Nouveau sélecteur « Port CI-V du CW »** dans RADIO CAT → « Mode radio et CW », avec un bouton **« Chercher / tester »** :
+  il essaie les ports COM libres (et les vitesses usuelles) avec une simple lecture de fréquence, **sans jamais émettre**,
+  enregistre le port qui répond et affiche le mode et le BK-IN de la radio. Avant, ce port ne pouvait être enregistré
+  qu'en se connectant une fois au CAT sur ce port, ce que les utilisateurs de HRD ne faisaient pas : le CW par la radio
+  et le changement de mode n'étaient alors jamais disponibles.
 - Le message « La radio est en mode CW » indique maintenant **pourquoi** le CW ne peut pas partir par la radio
   (aucun port CI-V enregistré, radio non Icom, BK-IN désactivé, port occupé, mode CW non confirmé…).
 - Rappel : le CW par le manipulateur de la radio demande une **radio Icom** avec un **port CI-V** : connexion série

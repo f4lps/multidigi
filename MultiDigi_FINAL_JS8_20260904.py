@@ -27341,7 +27341,7 @@ class RadioController:
             return aux['sp'], int(aux['civ'])
         return None
 
-    def cw_open_aux(self, port, baud, civ_addr):
+    def cw_open_aux(self, port, baud, civ_addr, diagnose=True):
         """Ouvre un port CAT auxiliaire pour le CW natif quand la connexion principale est HRD/FLRig/OmniRig.
         Vérifie que la radio répond (simple lecture de fréquence, aucune émission). Retourne (ok, message)."""
         if not SERIAL_AVAILABLE:
@@ -27357,7 +27357,7 @@ class RadioController:
             sp.rts = False
             sp.open()
         except Exception as e:
-            return False, (_f4lps_port_busy_message(port, e) or str(e))
+            return False, ((_f4lps_port_busy_message(port, e) if diagnose else None) or str(e))
         time.sleep(0.05)
         addrs = [int(civ_addr)] if civ_addr else [0x94, 0x98, 0x88, 0x70, 0xA2, 0x6E, 0x76, 0x7C, 0x90]
         found = None
@@ -29820,6 +29820,37 @@ class MacrosWindow(QDialog):
 # ============================================================================
 # FENÊTRE RADIO CAT (V1.6.53)
 # ============================================================================
+class _CivScanThread(QThread):
+    """V8.5.2 F4LPS — cherche, parmi les ports COM libres, celui qui parle CI-V vers la radio (lecture de fréquence seule,
+    aucune émission) : typiquement le port auxiliaire de Win4Icom quand HRD tient le port principal."""
+    progress = pyqtSignal(str)
+    done = pyqtSignal(str, int, int, str)          # port, baud, adresse CI-V, message ('' = rien trouvé)
+
+    BAUDS = (19200, 57600, 115200, 9600, 38400, 4800)
+
+    def __init__(self, rc, ports, civ_addr, first_baud=None, parent=None):
+        super().__init__(parent)
+        self.rc, self.ports, self.civ = rc, list(ports), int(civ_addr)
+        b = [int(first_baud)] if first_baud else []
+        self.bauds = b + [x for x in self.BAUDS if x not in b]
+
+    def run(self):
+        try:
+            for port in self.ports:
+                self.progress.emit(f"🔍 {port}…")
+                for baud in self.bauds:
+                    ok, msg = self.rc.cw_open_aux(port, baud, self.civ, diagnose=False)
+                    if ok:
+                        m = re.search(r'0x([0-9A-Fa-f]{2})', msg)
+                        self.done.emit(port, baud, int(m.group(1), 16) if m else self.civ, msg)
+                        return
+                    if 'ne répond pas' not in msg:      # occupé / introuvable : inutile d'essayer d'autres vitesses
+                        break
+            self.done.emit('', 0, 0, '')
+        except Exception as e:
+            self.done.emit('', 0, 0, f"erreur : {type(e).__name__}: {e}")
+
+
 class RadioCatWindow(QDialog):
     """Fenêtre dédiée RADIO CAT — CI-V, HRD, FLRig, OmniRig."""
     def __init__(self, parent):
@@ -30009,6 +30040,35 @@ class RadioCatWindow(QDialog):
             "\nLa radio doit être en CW avec BK-IN activé. Décoché : le CW part en audio (radio en USB).")
         self._chk_native_cw.setChecked(bool(_cs.get('native_cw', True)))
         ol.addWidget(self._chk_native_cw)
+        _row = QHBoxLayout()
+        _row.addWidget(self._lbl("Port CI-V du CW :"))
+        self._civ_port = QComboBox()
+        self._civ_port.addItem("— choisir / chercher —", "")
+        try:
+            import serial.tools.list_ports as _lp2
+            for _p in _lp2.comports():
+                self._civ_port.addItem(f"{_p.device} — {_p.description[:26]}", _p.device)
+        except Exception:
+            pass
+        if _cs.get('civ_port'):
+            _ix = self._civ_port.findData(_cs.get('civ_port'))
+            if _ix >= 0:
+                self._civ_port.setCurrentIndex(_ix)
+        self._civ_port.setToolTip(
+            "Port COM CI-V LIBRE qui va vers la radio, utilisé en plus de HRD / FLRig / OmniRig pour le CW par la radio\n"
+            "et le changement de mode (ex. port auxiliaire de Win4Icom). Ce n'est PAS le port que HRD tient déjà.\n"
+            "Sans ce port, MultiDigi envoie le CW en audio (radio en USB).")
+        _row.addWidget(self._civ_port, 1)
+        self._btn_civ_test = QPushButton("🔍 Chercher / tester")
+        self._btn_civ_test.setToolTip("Essaie le port choisi (ou tous les ports libres) avec une simple lecture de fréquence.\n"
+                                      "Aucune émission n'est jamais commandée.")
+        self._btn_civ_test.clicked.connect(self._civ_find_or_test)
+        _row.addWidget(self._btn_civ_test)
+        ol.addLayout(_row)
+        self._civ_status = QLabel("")
+        self._civ_status.setWordWrap(True)
+        self._civ_status.setStyleSheet("font-size:8pt;color:#aaaaaa;")
+        ol.addWidget(self._civ_status)
         def _save_opts(_=None):
             try:
                 cs = dict(getattr(self.main, '_cat_settings', {}) or {})
@@ -30104,6 +30164,67 @@ class RadioCatWindow(QDialog):
         root.addWidget(scroll)
 
     # ── Actions ───────────────────────────────────────────────────────────────
+    def _civ_find_or_test(self):
+        """Cherche (ou teste) le port CI-V du CW ; à la fin, l'enregistre et dit ce que la radio répond."""
+        m = self.main
+        if not SERIAL_AVAILABLE:
+            self._civ_status.setText("❌ pyserial non disponible")
+            return
+        civ_txt = self._civ.currentText()
+        mm = re.search(r'0x([0-9A-Fa-f]{2})', civ_txt)
+        civ = int(mm.group(1), 16) if mm else 0x94
+        chosen = self._civ_port.currentData()
+        if chosen:
+            ports = [chosen]
+        else:
+            ports = [self._civ_port.itemData(i) for i in range(1, self._civ_port.count()) if self._civ_port.itemData(i)]
+        try:
+            first = int((getattr(m, '_cat_settings', {}) or {}).get('civ_baud') or self._cat_baud.currentText())
+        except Exception:
+            first = 19200
+        self._btn_civ_test.setEnabled(False)
+        self._civ_status.setStyleSheet("font-size:8pt;color:#ffaa44;")
+        self._civ_status.setText("🔍 Recherche…")
+        self._civ_thread = _CivScanThread(m.radio_ctrl, ports, civ, first, self)
+        self._civ_thread.progress.connect(lambda t: self._civ_status.setText(t))
+        self._civ_thread.done.connect(self._civ_found)
+        self._civ_thread.start()
+
+    def _civ_found(self, port, baud, civ, msg):
+        self._btn_civ_test.setEnabled(True)
+        m = self.main
+        if not port:
+            self._civ_status.setStyleSheet("font-size:8pt;color:#ff6644;")
+            self._civ_status.setText(
+                "❌ " + (msg or "Aucune radio ne répond en CI-V sur les ports libres.") +
+                " Il faut un port CI-V supplémentaire vers la radio (par exemple un port auxiliaire de Win4Icom). "
+                "Sans lui : passe la radio en USB, ou connecte MultiDigi directement à la radio en Icom CI-V (sans HRD).")
+            return
+        rc = m.radio_ctrl
+        link = rc.cw_link()
+        if not link:                                    # liaison refermée entre-temps : on la rouvre pour lire mode et BK-IN
+            rc.cw_open_aux(port, baud, civ, diagnose=False)
+            link = rc.cw_link()
+        mode = bk = ''
+        if link:
+            mode = RadioController.civ_read_mode(link[0], link[1]) or '?'
+            b = RadioController.civ_read_breakin(link[0], link[1])
+            bk = {0: 'BK-IN désactivé ⚠️', 1: 'BK-IN semi', 2: 'BK-IN full'}.get(b, 'BK-IN ?')
+        idx = self._civ_port.findData(port)
+        if idx >= 0:
+            self._civ_port.setCurrentIndex(idx)
+        cs = dict(getattr(m, '_cat_settings', {}) or {})
+        cs.update({'civ_port': port, 'civ_baud': int(baud)})
+        m._cat_settings = cs
+        m._civ_aux_retry_at = 0.0
+        try:
+            m._save_settings()
+        except Exception:
+            pass
+        m._radio_log(f"port CI-V du CW enregistré : {port} @ {baud} (0x{civ:02X}), mode {mode}, {bk}")
+        self._civ_status.setStyleSheet("font-size:8pt;color:#00ff66;")
+        self._civ_status.setText(f"✅ {port} @ {baud} bauds : la radio répond (CI-V 0x{civ:02X}), mode {mode}, {bk}. Enregistré.")
+
     def _auto_detect_cat_port(self):
         """V8.4.1 F4LPS : teste chaque port série disponible avec une simple
         lecture de fréquence (CI-V ou CAT Yaesu) — jamais d'émission — et
@@ -36836,19 +36957,20 @@ class PSKMainWindow(QMainWindow):
             return False, "radio non connectée par HRD / FLRig / OmniRig / série Icom"
         if str(cs.get('protocol', 'icom')) != 'icom':
             return False, "le CW par la radio n'existe qu'en CI-V (radio Icom) : le protocole RADIO CAT n'est pas Icom"
-        if not cs.get('port'):
-            return False, ("aucun Port COM CI-V enregistré : dans RADIO CAT, choisis un port CI-V libre vers la radio "
-                           "(ex. port auxiliaire de Win4Icom) et clique CONNECTER une fois")
+        port = cs.get('civ_port') or cs.get('port')
+        if not port:
+            return False, ("aucun port CI-V enregistré : dans RADIO CAT → « Mode radio et CW », clique « Chercher / tester » "
+                           "(il faut un port CI-V libre vers la radio, ex. port auxiliaire de Win4Icom)")
         if time.time() < float(getattr(self, '_civ_aux_retry_at', 0.0) or 0.0):
             return False, getattr(self, '_civ_aux_last_msg', "liaison CI-V indisponible")
         m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
         civ = int(m.group(1), 16) if m else 0x94
         try:
-            baud = int(cs.get('baud', 19200))
+            baud = int(cs.get('civ_baud') or cs.get('baud', 19200))
         except Exception:
             baud = 19200
-        ok, msg = rc.cw_open_aux(str(cs['port']), baud, civ)
-        self._radio_log(f"liaison CI-V auxiliaire {cs.get('port')} : {'OK' if ok else 'ECHEC'} — {msg}")
+        ok, msg = rc.cw_open_aux(str(port), baud, civ)
+        self._radio_log(f"liaison CI-V auxiliaire {port} @ {baud} : {'OK' if ok else 'ECHEC'} — {msg}")
         if not ok:
             self._civ_aux_retry_at = time.time() + 60.0
             self._civ_aux_last_msg = msg

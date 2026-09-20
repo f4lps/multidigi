@@ -186,6 +186,14 @@ fabrique le morse. Il faut :
   radio (par exemple le port auxiliaire de Win4Icom), **pas** le port que HRD tient déjà.
 Si la radio ne répond pas ou ne confirme pas le mode CW, MultiDigi envoie le CW **en audio** (radio en USB).
 
+**Avec HRD (IC-7300, etc.) : indiquer le port CI-V du CW**
+HRD tient le port CI-V principal : MultiDigi a besoin d'un **second port CI-V libre vers la radio** (par exemple un port
+auxiliaire de **Win4Icom**, ou un port d'une paire virtuelle VSPD). Dans **RADIO CAT → « Mode radio et CW »**, clique
+**« Chercher / tester »** : MultiDigi essaie les ports libres (lecture de fréquence seulement, aucune émission), enregistre
+celui qui répond et affiche le mode et le BK-IN de la radio. Sans ce port, le CW part en **audio** et la radio doit être
+en **USB** (en CW elle ignorerait l'audio). Autre solution sans port supplémentaire : fermer HRD et connecter MultiDigi
+**directement** à la radio en Icom CI-V.
+
 Le bouton **ABORT** arrête le message en cours. Tout ce que MultiDigi décide pour le mode radio est écrit dans
 `multidigi_radio.log` (dossier utilisateur) : à joindre à un rapport de problème.
 
