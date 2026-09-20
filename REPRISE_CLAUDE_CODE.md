@@ -50,6 +50,51 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
    - Tests (sans radio, `CW_Terminal_Dev/`) : `test_md_native.py` (fausse radio COM16/COM17 + faux HRD qui mémorise
      le mode, **dossier utilisateur temporaire : ne touche jamais aux réglages réels**), `test_md_cwmode.py`.
 
+### ⚠️ POINTS OUVERTS après le test en direct (fin de session du 20 septembre 2026) — À TRAITER EN PREMIER
+
+**A. La bascule automatique CW/USB ne marche pas sur le vrai poste.**
+- Cause trouvée : sur le vrai serveur HRD de l'utilisateur (Win4Icom, radio `IC-7300`), la commande `set mode USB` /
+  `set mode CW` (utilisée par `RadioController.set_mode_usb/set_mode_cw`) **n'a aucun effet** (réponse vide, `get mode`
+  inchangé) et ces fonctions renvoient `True` sans vérifier. Le faux HRD de `test_md_native.py` acceptait `set mode`
+  parce que **cette syntaxe avait été inventée pour le test** : test trop indulgent, à corriger.
+- Ce que dit le vrai serveur (lecture seule) : `get id` = « Ham Radio Deluxe », `get dropdowns` = `Mode,Data,Filter,AGC,…`,
+  `get dropdown-list {Mode}` = `LSB,USB,AM,CW,RTTY,FM,CW-R,RTTY-R` (accolades obligatoires ; sans accolades → vide),
+  `get dropdown-text {Mode}` = `Mode: CW`. Syntaxe d'écriture essayée : `set dropdown {Mode} USB 2` a fait passer en USB
+  **une fois** ; ensuite le mode lu est resté bloqué sur `AM` quelle que soit la commande (`CW 3/4/5…`, index 1..8) et le
+  rafraîchissement de `get mode` peut prendre plusieurs secondes (radio distante). **HRD n'est pas fiable pour changer
+  de mode ici.**
+- Correctif prévu : changer et lire le mode en **CI-V** sur la liaison auxiliaire (`cw_link()`, COM13) : `FE FE 94 E0 06 01 FD`
+  (USB), `… 06 03 …` (CW), lecture `… 04 …` (réponse `FE FE E0 94 04 <mode> <filtre> FD`, mode : 0 LSB, 1 USB, 2 AM, 3 CW,
+  4 RTTY, 5 FM, 7 CW-R, 8 RTTY-R) ; vérifier par relecture ; HRD (`set dropdown {Mode} <texte> <index 1-based>`) seulement
+  en secours ; faire renvoyer un vrai succès/échec ; pour les familles non-CW, ouvrir la liaison seulement le temps du
+  changement (ne pas garder COM13 en permanence). Corriger le faux HRD de test pour imiter le vrai (`set mode` → vide).
+- Même défaut probable dans CW Terminal (`set mode DATA-U/USB` du repli audio HRD) : à vérifier, peu d'impact car son CW
+  passe par CI-V.
+
+**B. Le moteur CW FIT sépare mal les mots** (retour utilisateur : « il décode plutôt bien mais ne sépare pas bien les
+mots »).
+- Constat sur le signal réel (segment SM5X, `CW_Terminal_Dev/fixed_seg.npy`, 515 silences ≥ 1,9 unité) : espaces entre
+  lettres ≈ 3–3,5 unités (pic), espaces entre mots ≈ 5,5–7 ; le seuil actuel `xs >= 5.5` (dans `_read`, en dur, 2 endroits :
+  `isolated` et l'évènement `('s', …)`) tombe **dans la vallée** (5,0–5,5 : 12 évènements, 4,5–5,0 : 19) → mots collés.
+- À faire : rendre le seuil paramétrable (`WORD_GAP`, défaut 5.5), balayer 4.4–5.5 sur le segment réel (compter
+  `TEST SM5X` exact, `TESTSM5X` collé et mots coupés à tort) **et** sur le banc synthétique (`bench_cw.py`, gaps de 7
+  unités, gigue 18 %), éventuellement seuil adaptatif (milieu entre les médianes des deux groupes de silences).
+  Reporter dans `cw_fit_decoder.py` (CW Terminal, dépôt public → V1.9.2) **et** dans le bloc `CWFitDecoder` de MultiDigi.
+- État : **pas encore modifié** (l'édition a été interrompue).
+
+**C. ⚠️ Radio laissée en AM par mes essais.** Pendant les tests HRD, le mode de l'IC-7300 de l'utilisateur (parti de CW,
+aucune émission) est resté sur `AM`. À remettre en CW (dans HRD, ou par le correctif A). COM13 était tenu par son MultiDigi
+(PID 31196, lancé à 14:22), donc impossible de le remettre en CI-V depuis ici.
+
+**D. Divers.**
+- Détection du « qui tient le port » validée sur le vrai PC : COM13 → `python.exe` (MultiDigi), COM11 → `OmniRig.exe`,
+  COM15 → `HamRadioDeluxe.exe`.
+- Les tests `test_md_*.py` doivent utiliser un dossier utilisateur temporaire (fait dans `test_md_native.py`) pour ne
+  jamais toucher `C:\Users\14frs\psk_terminal_settings.json` pendant que MultiDigi tourne.
+- Décisions en attente : fusionner/publier MultiDigi 8.5.0 (reconstruction 30–90 min) ; supprimer la release `v1.9` de
+  CW Terminal ; CW Terminal 1.9.2 (détection du port occupé, garde « déjà ouvert », DTR/RTS coupés à l'ouverture) ;
+  manuel `.docx` encore en V1.8. Toute publication : uniquement avec l'accord explicite de l'utilisateur.
+
 ### Mesures (pour ne pas les refaire)
 - Banc synthétique (mêmes signaux que CW Terminal, 2 essais/scénario), erreur moyenne par caractère :
   **FIT ≈ 4 %**, NEXT ≈ 32 %, CLASSIC ≈ 40 % (`CW_Terminal_Dev/bench_multidigi.py`). Mon générateur est idéal.
