@@ -13,6 +13,7 @@ FSK/PSK réels).
 - **JS8** — SLOW, NORMAL, FAST, JS8 40, JS8 60 (Huffman DATA, CRC12,
   LDPC(174,87), Costas, 8-FSK, trames structurées HB/CQ/CQ DX/dirigées)
 - **Olivia**, **Contestia**, **DominoEX**, **RTTY**, **Hell**, **CW**
+  (trois moteurs CW au choix : **CW FIT** par défaut, **CW NEXT**, **CW CLASSIC**)
 
 ## Fonctionnalités principales
 
@@ -32,6 +33,11 @@ FSK/PSK réels).
   WSJT-X (UDP)
 - Trois thèmes d'interface : **Aluminium usé**, **Carbone**, **Néon**
 - Vérificateur de mise à jour intégré (onglet À propos)
+- **CW FIT** : décodeur CW par ajustement du modèle de timing Morse — bien meilleur sur signaux
+  faibles, QSB (fading) et manipulation à la main, silencieux sur du bruit
+- Connexion CAT plus claire : quand un port COM est déjà utilisé, MultiDigi **nomme le logiciel
+  fautif** (ex. « COM13 déjà utilisé par CW_Terminal.exe (PID 1234) »), et affiche en **orange**
+  (au lieu du ✅ vert) un port ouvert dont la radio ne répond pas
 
 ## Installation
 

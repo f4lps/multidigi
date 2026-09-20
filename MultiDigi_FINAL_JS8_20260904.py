@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.4.7"
+PROGRAM_VERSION_TAG = "8.5.0"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -10957,7 +10957,436 @@ class CWSkimmerNextV8310Decoder(CWSkimmerNextV838Decoder):
         return med_u, conf
 
 
+# ============================================================================
+# MOTEUR CW « FIT » (V8.5) — ajustement du modèle de timing Morse
+# ----------------------------------------------------------------------------
+# Un décodeur classique décide « point ou trait ? » élément par élément d'après
+# une vitesse moyenne apprise au fil de l'eau. Sur signal faible ou en QSB, un
+# seuil trop haut raccourcit les éléments, ce qui fausse la vitesse estimée, ce
+# qui fausse l'élément suivant : boucle sans retour, d'où les rafales de E/T/I.
+# Ici on garde quelques secondes d'enveloppe et on CHERCHE, à chaque « hop », le
+# triplet (seuil, longueur du dit, biais de front) qui colle le mieux à la grammaire
+# Morse (marques de 1 ou 3 unités, silences de 1, 3 ou 7). Le résidu de l'ajustement
+# est une vraie mesure de confiance : du bruit n'a pas de grammaire, son coût reste
+# élevé et rien n'est émis. Mis au point et validé dans CW Terminal V1.9 (F4LPS) ;
+# l'idée d'évaluer (vitesse, seuil) par l'ajustement au timing Morse vient de
+# ggmorse (G. Gerganov), la mise en oeuvre est originale.
+# ============================================================================
+try:
+    from scipy.signal import lfilter as _fit_lfilter
+except Exception:                                    # scipy est déjà requis ailleurs
+    _fit_lfilter = None
+
+_FIT_MORSE = {
+    '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E', '..-.': 'F',
+    '--.': 'G', '....': 'H', '..': 'I', '.---': 'J', '-.-': 'K', '.-..': 'L',
+    '--': 'M', '-.': 'N', '---': 'O', '.--.': 'P', '--.-': 'Q', '.-.': 'R',
+    '...': 'S', '-': 'T', '..-': 'U', '...-': 'V', '.--': 'W', '-..-': 'X',
+    '-.--': 'Y', '--..': 'Z',
+    '-----': '0', '.----': '1', '..---': '2', '...--': '3', '....-': '4',
+    '.....': '5', '-....': '6', '--...': '7', '---..': '8', '----.': '9',
+    '.-.-.-': '.', '--..--': ',', '..--..': '?', '-..-.': '/', '-...-': '=',
+    '.-.-.': '+', '-....-': '-', '...-.-': '<SK>', '.-...': '<AS>',
+    '-.-.-': '<KA>', '-.--.': '(', '.-..-.': '"',
+}
+
+
+def _fit_edit1(a, b):
+    """True si a et b (chaînes de . et -) diffèrent d'exactement un élément (ajout, retrait ou substitution)."""
+    if a == b:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    if abs(len(a) - len(b)) != 1:
+        return False
+    s, l = (a, b) if len(a) < len(b) else (b, a)
+    return any(l[:i] + l[i + 1:] == s for i in range(len(l)))
+
+
+_FIT_SINGLE = {k: v for k, v in _FIT_MORSE.items() if len(v) == 1 and v.isalnum()}   # lettres et chiffres seulement
+_FIT_FIX1 = {}
+for _n in range(1, 8):                                              # motifs invalides jusqu'à 7 éléments
+    for _i in range(2 ** _n):
+        _code = ''.join('-' if (_i >> _k) & 1 else '.' for _k in range(_n))
+        if _code in _FIT_MORSE:
+            continue
+        _cand = [v for k, v in _FIT_SINGLE.items() if _fit_edit1(_code, k)]
+        if len(_cand) == 1:
+            _FIT_FIX1[_code] = _cand[0]
+
+
+class CWFitDecoder:
+    ENV_RATE = 250.0          # Hz, débit de l'enveloppe (pas de 4 ms)
+    WINDOW_S = 7.0            # mémoire d'enveloppe
+    HOP_S = 0.20              # fréquence des ajustements
+    WPM_MIN, WPM_MAX = 6.0, 45.0
+    N_UNITS = 34              # taille de la grille de longueurs de dit
+    THRESH_FRACS = (0.28, 0.36, 0.44, 0.52, 0.60)
+    BIAS_FRACS = (-0.18, -0.09, 0.0, 0.09, 0.18)   # biais de front, en unités de dit
+    MIN_RUNS = 7              # évènements complets minimum pour tenter un ajustement
+    MAX_COST = 0.55           # coût moyen maximal accepté (0.42 coupait les signaux faibles/QSB)
+    MIN_CONTRAST = 3.0        # pic/plancher minimal de l'enveloppe
+    FIX_ONE = True            # motif invalide -> seul caractère valide à un élément près (ex. ...... -> 5)
+    HYST_W = 0.28             # écart entre seuil d'attaque et de relâchement (fraction de l'excursion)
+    HYST_MIN = 0.08           # le seuil de relâchement ne descend pas sous ce niveau
+    HEAL_DEPTH = 0.08         # espace court dont l'enveloppe ne descend pas sous ce niveau (0=plancher,1=crête) = creux de fading
+    DESPECKLE_U = 0.35        # évènements plus courts que cette fraction de dit = parasites
+    TRACK_COST = 0.25         # coût maximal pour apprendre/verrouiller la vitesse
+    GOOD_COST = 0.40          # au-dessus de ce coût, on n'émet que les caractères propres et non isolés
+    LOCK_S = 0.0              # durée pendant laquelle la vitesse suivie borne la recherche
+    LOCK_RATIO = 1.7          # fenêtre de vitesse autorisée autour de la vitesse suivie
+
+    def __init__(self, sr, freq_hz, cid=0):
+        self.sr = int(sr)
+        self.freq_hz = float(freq_hz)
+        self.cid = cid
+        self.active = True
+        self._decim = max(1, int(round(self.sr / self.ENV_RATE)))
+        self.env_rate = self.sr / self._decim
+        self._alpha = 1.0 - math.exp(-2.0 * math.pi * 45.0 / self.sr)
+        self._units = np.geomspace(1.2 / self.WPM_MAX, 1.2 / self.WPM_MIN, self.N_UNITS)
+        self.reset()
+
+    # ── état ────────────────────────────────────────────────────────────────
+    def reset(self):
+        self._phase = 0.0
+        self._i_lp = 0.0
+        self._q_lp = 0.0
+        self._i2 = 0.0
+        self._q2 = 0.0
+        self._resid = np.zeros(0)
+        self._env = np.zeros(int(self.WINDOW_S * self.env_rate))
+        self._n_env = 0                     # nombre total d'échantillons d'enveloppe produits
+        self._since_fit = 0
+        self._char_wm = 0                   # un caractère est nouveau s'il commence après ce repère
+        self._space_wm = -10 ** 9           # idem pour les espaces entre mots
+        self._u_track = None                # durée du dit suivie (s)
+        self._last_good = -10 ** 9          # index d'enveloppe du dernier ajustement accepté
+        self.confidence = 0.0
+        self.wpm = 0.0
+        self.cost = 9.9
+        self.env_last = 0.0
+        self.snr = 0.0
+        self.chars = 0
+
+    def set_pitch(self, hz):
+        self.freq_hz = float(hz)
+
+    @property
+    def pitch(self):
+        return self.freq_hz
+
+    # ── enveloppe ───────────────────────────────────────────────────────────
+    def _envelope(self, chunk):
+        n = len(chunk)
+        inc = 2.0 * math.pi * self.freq_hz / self.sr
+        ph = self._phase + inc * np.arange(n)
+        self._phase = (self._phase + inc * n) % (2.0 * math.pi)
+        x = np.asarray(chunk, dtype=np.float64)
+        a = self._alpha
+        # deux pôles en cascade : sélectivité ~40 dB à 400 Hz du porteur, front de montée ~10 ms
+        f = ([a], [1.0, -(1.0 - a)])
+        i1, _ = _fit_lfilter(*f, x * np.cos(ph), zi=[self._i_lp * (1 - a)])
+        q1, _ = _fit_lfilter(*f, x * np.sin(ph), zi=[self._q_lp * (1 - a)])
+        i_out, _ = _fit_lfilter(*f, i1, zi=[self._i2 * (1 - a)])
+        q_out, _ = _fit_lfilter(*f, q1, zi=[self._q2 * (1 - a)])
+        self._i_lp, self._q_lp = float(i1[-1]), float(q1[-1])
+        self._i2, self._q2 = float(i_out[-1]), float(q_out[-1])
+        env = np.concatenate([self._resid, np.hypot(i_out, q_out)])
+        m = (len(env) // self._decim) * self._decim
+        self._resid = env[m:]
+        if m == 0:
+            return np.zeros(0)
+        return env[:m].reshape(-1, self._decim).mean(axis=1)
+
+    def _push_env(self, e):
+        L, k = len(self._env), len(e)
+        if k >= L:
+            self._env[:] = e[-L:]
+        else:
+            self._env[:-k] = self._env[k:]
+            self._env[-k:] = e
+        self._n_env += k
+
+    # ── seuil local (suit le QSB) ───────────────────────────────────────────
+    def _local_peak(self, env, floor, gpeak):
+        """Pic local par blocs de ~0.6 s ; les blocs sans signal héritent de leurs voisins."""
+        blk = max(4, int(0.6 * self.env_rate))
+        nb = max(1, len(env) // blk)
+        cen, val = [], []
+        for k in range(nb):
+            seg = env[k * blk:(k + 1) * blk] if k < nb - 1 else env[k * blk:]
+            p = float(np.percentile(seg, 95))
+            if p > floor + 0.40 * (gpeak - floor):
+                cen.append(k * blk + len(seg) / 2.0)
+                val.append(p)
+        if not cen:
+            return np.full(len(env), gpeak)
+        return np.interp(np.arange(len(env)), cen, val)
+
+    # ── binarisation et nettoyage ───────────────────────────────────────────
+    @staticmethod
+    def _rle(binary):
+        if len(binary) == 0:
+            return []
+        edges = np.flatnonzero(np.diff(binary.astype(np.int8))) + 1
+        starts = np.concatenate([[0], edges])
+        ends = np.concatenate([edges, [len(binary)]])
+        return [[int(binary[s]), int(s), int(e - s)] for s, e in zip(starts, ends)]
+
+    @staticmethod
+    def _hysteresis(env, hi, lo):
+        state = np.zeros(len(env), dtype=bool)
+        cur = False
+        for i, v in enumerate(env):
+            if not cur and v > hi[i]:
+                cur = True
+            elif cur and v < lo[i]:
+                cur = False
+            state[i] = cur
+        return state
+
+    @staticmethod
+    def _despeckle(runs, min_len):
+        """Fusionne tout évènement plus court que min_len avec ses voisins."""
+        while len(runs) > 2:
+            k = min(range(1, len(runs) - 1), key=lambda j: runs[j][2])
+            if runs[k][2] >= min_len:
+                break
+            a, b, c = runs[k - 1], runs[k], runs[k + 1]
+            runs[k - 1:k + 2] = [[a[0], a[1], a[2] + b[2] + c[2]]]
+        return runs
+
+    # ── coût du modèle de timing ────────────────────────────────────────────
+    TRIM = 1.0                # part des évènements les mieux ajustés retenue dans le coût
+
+    def _cost_grid(self, marks, spaces, bias_units):
+        """Coût robuste : moyenne des TRIM meilleurs évènements. Quelques éléments déformés
+        par le fading ne condamnent plus la fenêtre ; du bruit (tout est mauvais) reste rejeté."""
+        U = self._units[:, None, None]
+        B = bias_units[None, :, None]
+        x = np.maximum(marks[None, None, :] / U + B, 1e-3)
+        e = np.minimum(np.abs(np.log(x)), np.abs(np.log(x / 3.0)))
+        per = np.minimum((e / 0.32) ** 2, 4.0)
+        if len(spaces):
+            x = np.maximum(spaces[None, None, :] / U - B, 1e-3)
+            # 1 unité, ou « au moins 3 » (tolère l'espacement Farnsworth), zone 1.7–2.4 ambiguë
+            e = np.where(x <= 1.7, np.abs(np.log(x)), np.where(x >= 2.4, 0.0, 0.55))
+            per = np.concatenate([per, np.minimum((e / 0.32) ** 2, 4.0)], axis=2)
+        n = per.shape[2]
+        keep = max(3, int(round(self.TRIM * n)))
+        cost = np.partition(per, keep - 1, axis=2)[:, :, :keep].mean(axis=2)
+        if self._u_track is not None:
+            cost = cost + 0.06 * np.log(self._units[:, None] / self._u_track) ** 2
+            if self._n_env - self._last_good <= self.LOCK_S * self.env_rate:
+                r = self._units[:, None] / self._u_track
+                cost = np.where((r > self.LOCK_RATIO) | (r < 1.0 / self.LOCK_RATIO), 9.0, cost)
+        return cost
+
+    def _heal(self, runs, lv, u):
+        """Recolle deux marques séparées par un espace court mais peu profond : creux de fading
+        à l'intérieur d'un dah (un vrai espace redescend jusqu'au plancher de bruit)."""
+        if self.HEAL_DEPTH >= 1.0:
+            return runs
+        out = []
+        i = 0
+        while i < len(runs):
+            st, s0, ln = runs[i]
+            if (st == 0 and out and out[-1][0] == 1 and i + 1 < len(runs) and runs[i + 1][0] == 1
+                    and ln / self.env_rate / u < 2.0 and float(lv[s0:s0 + ln].min()) > self.HEAL_DEPTH):
+                nxt = runs[i + 1]
+                out[-1] = [1, out[-1][1], out[-1][2] + ln + nxt[2]]
+                i += 2
+                continue
+            out.append([st, s0, ln])
+            i += 1
+        return out
+
+    def _search(self, runs):
+        core = runs[1:-1]
+        if len(core) < self.MIN_RUNS:
+            return None
+        marks = np.array([r[2] for r in core if r[0] == 1]) / self.env_rate
+        spaces = np.array([r[2] for r in core if r[0] == 0]) / self.env_rate
+        if len(marks) < 3:
+            return None
+        cost = self._cost_grid(marks, spaces, np.array(self.BIAS_FRACS))
+        k = np.unravel_index(np.argmin(cost), cost.shape)
+        return float(cost[k]), float(self._units[k[0]]), float(self.BIAS_FRACS[k[1]])
+
+    # ── ajustement + lecture ────────────────────────────────────────────────
+    def _fit(self):
+        n_valid = min(self._n_env, len(self._env))
+        if n_valid < int(1.5 * self.env_rate):
+            return []
+        env = self._env[-n_valid:]
+        base_idx = self._n_env - n_valid
+        floor = float(np.percentile(env, 8))
+        gpeak = float(np.percentile(env, 97))
+        self.env_last = float(env[-1] / max(gpeak, 1e-12))
+        self.snr = gpeak / max(floor, 1e-12)
+        if self.snr < self.MIN_CONTRAST or gpeak <= 1e-9:
+            self.confidence = 0.0
+            return []
+        peak = self._local_peak(env, floor, gpeak)
+        lv = (env - floor) / np.maximum(peak - floor, 1e-12)
+        best = None
+        for tf in self.THRESH_FRACS:
+            hi = floor + tf * (peak - floor)
+            lo = floor + np.maximum(tf - self.HYST_W, self.HYST_MIN) * (peak - floor)
+            runs = self._rle(self._hysteresis(env, hi, lo))
+            runs = self._despeckle(runs, max(2, int(0.010 * self.env_rate)))
+            r1 = self._search(runs)
+            if r1 is None:
+                continue
+            runs = self._despeckle(runs, int(self.DESPECKLE_U * r1[1] * self.env_rate))
+            runs = self._heal(runs, lv, r1[1])
+            r2 = self._search(runs)
+            if r2 is None:
+                continue
+            if best is None or r2[0] < best[0]:
+                best = (r2[0], r2[1], r2[2], runs)
+        if best is None:
+            self.confidence = 0.0
+            return []
+        c, u, b, runs = best
+        self.cost = c
+        self.wpm = 1.2 / u
+        self.confidence = float(np.clip(1.0 - c / self.MAX_COST, 0.0, 1.0))
+        if c > self.MAX_COST:
+            return []
+        if c <= self.TRACK_COST:                  # la vitesse n'est apprise que sur de bons ajustements
+            self._u_track = u if self._u_track is None else math.exp(0.7 * math.log(self._u_track) + 0.3 * math.log(u))
+            self._last_good = self._n_env
+        return self._read(runs, u, b, base_idx)
+
+    @staticmethod
+    def _mark_ok(x):
+        return 0.55 <= x <= 1.65 or 2.3 <= x <= 4.6
+
+    def _read(self, runs, u, b, base_idx):
+        """Lit la fenêtre ; ne retourne que ce qui n'a jamais été émis.
+        Qualité par caractère : quand l'ajustement global est médiocre (self.cost > GOOD_COST),
+        un caractère dont un élément est ambigu, ou un E/T isolé au milieu du silence,
+        n'est pas émis (typique des impulsions de bruit)."""
+        rate = self.env_rate
+        events = []            # ('c', car, début, fin, propre, isolé) | ('s', début_du_silence)
+        cur, cur_start, last_end = '', None, None
+        clean, lead = True, None
+        last = len(runs) - 1
+        prev_gap = None
+        for idx, (st, s, ln) in enumerate(runs):
+            x = ln / rate / u
+            a0 = base_idx + s
+            if st == 1:
+                if idx == 0:
+                    continue                      # marque tronquée au début
+                if idx == last:
+                    break                         # marque en cours : pas encore lisible
+                if cur_start is None:
+                    cur_start, clean, lead = a0, True, prev_gap
+                xm = x + b
+                clean = clean and self._mark_ok(xm)
+                cur += '.' if xm < 2.0 else '-'
+                last_end = a0 + ln
+            else:
+                if idx == 0:
+                    continue
+                xs = x - b
+                prev_gap = xs
+                if cur and xs < 2.2:
+                    clean = clean and (0.5 <= xs <= 1.7)
+                if xs >= 2.2 and cur and (idx < last or xs >= 3.2):
+                    isolated = len(cur) == 1 and (lead is None or lead >= 5.5) and xs >= 5.5
+                    events.append(('c', _FIT_MORSE.get(cur) or (_FIT_FIX1.get(cur) if self.FIX_ONE else None) or '?', cur_start, last_end, clean, isolated))
+                    cur, cur_start = '', None
+                if xs >= 5.5 and not cur and last_end is not None:
+                    events.append(('s', a0))
+        out = []
+        weak = self.cost > self.GOOD_COST
+        for ev in events:
+            if ev[0] == 'c':
+                if ev[2] > self._char_wm:
+                    if weak and (not ev[4] or ev[5] or ev[1] == '?'):
+                        self._char_wm = ev[3]         # écarté, mais on avance le repère
+                        continue
+                    out.append(ev[1])
+                    self._char_wm = ev[3]
+            elif ev[1] > self._space_wm + 6 and ev[1] >= self._char_wm - 6 and self._char_wm > 0:
+                if not out or out[-1] != ' ':
+                    out.append(' ')
+                self._space_wm = ev[1]
+        self.chars += sum(1 for c in out if c != ' ')
+        return out
+
+    # ── interface ───────────────────────────────────────────────────────────
+    def process(self, chunk):
+        if not self.active or len(chunk) == 0:
+            return []
+        e = self._envelope(chunk)
+        if len(e) == 0:
+            return []
+        self._push_env(e)
+        self._since_fit += len(e)
+        if self._since_fit < int(self.HOP_S * self.env_rate):
+            return []
+        self._since_fit = 0
+        return self._fit()
+
+
+class CWFitBackend:
+    """Expose CWFitDecoder avec l'API attendue par _CWModemAdapter (celle des décodeurs CWSkimmer).
+    Seuls les attributs et méthodes réellement utilisés par l'adaptateur sont fournis."""
+    engine_name = 'CW FIT'
+
+    def __init__(self, sample_rate):
+        self.sample_rate = int(sample_rate)
+        self._core = CWFitDecoder(self.sample_rate, 700.0)
+        self.base_pitch = 700.0
+        self.detected_pitch = 700.0
+        self.pitch_locked = False
+        self.wpm = 20
+        self.dit_duration = 1.2 / 20.0
+        self.calibrated = False
+        self.v3_snr_db = 0.0
+        self.cw_filter_bw_hz = 60.0
+        self.v3_quality_gate_enabled = False
+
+    def set_base_pitch(self, hz):
+        hz = float(hz)
+        if abs(hz - self._core.freq_hz) > 25.0:      # signal déplacé : l'ancienne enveloppe n'a plus de sens
+            self._core.reset()
+        self._core.freq_hz = hz
+        self.base_pitch = self.detected_pitch = hz
+
+    def soft_set_base_pitch(self, hz):
+        """Alignement automatique sans réinitialiser la lettre en cours."""
+        self._core.freq_hz = float(hz)
+        self.base_pitch = self.detected_pitch = float(hz)
+
+    def update_bandpass_filter(self):
+        pass                                          # le filtre est intégré (2 pôles, ~45 Hz)
+
+    def process_audio(self, chunk):
+        c = self._core
+        chars = c.process(np.asarray(chunk, dtype=np.float64))
+        if c.wpm > 0:
+            self.wpm = int(round(c.wpm))
+            self.dit_duration = 1.2 / max(c.wpm, 1.0)
+        self.calibrated = bool(c.wpm > 0 and c.confidence > 0.2)
+        try:
+            self.v3_snr_db = float(min(60.0, max(0.0, 20.0 * math.log10(max(c.snr, 1.0)))))
+        except Exception:
+            pass
+        return (chars, float(c.env_last), self.base_pitch, 0.0)
+
+
+
 CW_MODES = {
+    "CW FIT": {
+        "bandwidth": 200.0,
+        "desc": "Morse — moteur FIT (ajustement du timing Morse) : signaux faibles, QSB, manipulation à la main",
+    },
     "CW CLASSIC": {
         "bandwidth": 200.0,
         "desc": "Morse — moteur Classic V5.3 stable + diagnostic WPM",
@@ -10990,7 +11419,9 @@ class _CWModemAdapter:
 
     def __init__(self, sample_rate, mode="CW NEXT"):
         self._cw_engine_mode = str(mode or "CW NEXT")
-        if self._cw_engine_mode == "CW CLASSIC":
+        if self._cw_engine_mode == "CW FIT":
+            self._d = CWFitBackend(int(sample_rate))
+        elif self._cw_engine_mode == "CW CLASSIC":
             self._d = CWSkimmerV701Decoder(int(sample_rate))
         else:
             self._d = CWSkimmerNextV8310Decoder(int(sample_rate))
@@ -11160,7 +11591,10 @@ class _CWModemAdapter:
             pitch = float(getattr(self._d, 'base_pitch', 520.0))
             bw = float(getattr(self._d, 'cw_filter_bw_hz', 60.0))
             wpm = float(getattr(self, 'cw_rx_wpm', 20.0))
-            self._d = CWSkimmerV3Decoder(sr)
+            if getattr(self, '_cw_engine_mode', '') == 'CW FIT':
+                self._d = CWFitBackend(sr)
+            else:
+                self._d = CWSkimmerV3Decoder(sr)
             self._d.cw_filter_bw_hz = bw
             self._d.set_base_pitch(pitch)
             self._d.wpm = int(wpm)
@@ -23347,7 +23781,7 @@ MULTIDIGI_MODEM_REGISTRY = {
     },
     "CW": {
         "modes": list(CW_MODES.keys()),
-        "default_mode": "CW NEXT",
+        "default_mode": "CW FIT",          # V8.5 : moteur FIT par défaut (NEXT et CLASSIC restent au choix)
         "decoder_factory": _CWModemAdapter,
         "encoder_factory": _CWEncoderAdapter,
     },
@@ -26409,6 +26843,135 @@ class _FreqPollThread(QThread):
                 waited += 200
 
 
+def _f4lps_port_holders(port_name, budget_s=6.0):
+    """V8.5 F4LPS — Windows : programmes qui tiennent un port COM ouvert, [(pid, 'programme.exe'), ...].
+
+    Sert à dire « COM13 est utilisé par CW_Terminal.exe » au lieu de l'obscur « Accès refusé ». Ne modifie
+    rien : lit la table des handles du système, ne regarde que les handles de type fichier de type
+    « périphérique caractère » (ports série, console…) et compare leur nom NT à celui du port (obtenu par
+    QueryDosDevice, qui marche aussi pour les ports virtuels VSPD/Eltima). Retourne [] si Windows n'est pas
+    utilisé, si rien n'est trouvé, ou si le budget de temps est dépassé."""
+    if os.name != 'nt':
+        return []
+    try:
+        import ctypes
+        import ctypes.wintypes as W
+        import msvcrt
+        import threading
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        nt = ctypes.WinDLL('ntdll')
+        k32.OpenProcess.restype = W.HANDLE
+        k32.OpenProcess.argtypes = [W.DWORD, W.BOOL, W.DWORD]
+        k32.DuplicateHandle.argtypes = [W.HANDLE, W.HANDLE, W.HANDLE, ctypes.POINTER(W.HANDLE), W.DWORD, W.BOOL, W.DWORD]
+        k32.GetFileType.argtypes = [W.HANDLE]
+        k32.GetFileType.restype = W.DWORD
+        k32.CloseHandle.argtypes = [W.HANDLE]
+        k32.GetCurrentProcess.restype = W.HANDLE
+        k32.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, ctypes.POINTER(W.DWORD)]
+        nt.NtQueryObject.argtypes = [W.HANDLE, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+
+        buf = ctypes.create_unicode_buffer(1024)
+        if not k32.QueryDosDeviceW(str(port_name), buf, 1024):
+            return []
+        target = buf.value.lower()                           # ex. \device\vserial9_7
+
+        class _E(ctypes.Structure):
+            _fields_ = [('obj', ctypes.c_void_p), ('pid', ctypes.c_size_t), ('h', ctypes.c_size_t),
+                        ('access', ctypes.c_ulong), ('bt', ctypes.c_ushort), ('typeidx', ctypes.c_ushort),
+                        ('attr', ctypes.c_ulong), ('res', ctypes.c_ulong)]
+
+        # handle de référence (NUL) ouvert AVANT l'instantané : il sert à repérer l'index du type « File »
+        with open(os.devnull, 'rb') as _f:
+            _h = msvcrt.get_osfhandle(_f.fileno())
+            size = 1 << 24
+            while True:
+                tbl = ctypes.create_string_buffer(size)
+                ret = ctypes.c_ulong()
+                st = nt.NtQuerySystemInformation(64, tbl, size, ctypes.byref(ret))      # SystemExtendedHandleInformation
+                if (st & 0xffffffff) == 0xC0000004:
+                    size *= 2
+                    continue
+                if st != 0:
+                    return []
+                break
+            n = ctypes.c_size_t.from_buffer(tbl).value
+            ent = (_E * n).from_buffer(tbl, 16)
+            file_type = next((e.typeidx for e in ent if e.pid == os.getpid() and e.h == _h), None)
+        if file_type is None:
+            return []
+
+        class _US(ctypes.Structure):
+            _fields_ = [('Length', ctypes.c_ushort), ('Max', ctypes.c_ushort), ('Buf', ctypes.c_wchar_p)]
+
+        def _nt_name(hd, out):
+            b = ctypes.create_string_buffer(4096)
+            r = ctypes.c_ulong()
+            if nt.NtQueryObject(hd, 1, b, 4096, ctypes.byref(r)) == 0:
+                u = _US.from_buffer(b)
+                out.append(u.Buf if u.Length else '')
+
+        me = k32.GetCurrentProcess()
+        opened, found = {}, set()
+        t_end = time.time() + float(budget_s)
+        for e in ent:
+            if e.typeidx != file_type or e.pid in (0, 4) or e.pid in found:
+                continue
+            if time.time() > t_end:
+                break
+            ph = opened.get(e.pid)
+            if ph is None:
+                ph = opened[e.pid] = k32.OpenProcess(0x40, False, e.pid)          # PROCESS_DUP_HANDLE
+            if not ph:
+                continue
+            dup = W.HANDLE()
+            if not k32.DuplicateHandle(ph, W.HANDLE(e.h), me, ctypes.byref(dup), 0, False, 2):
+                continue
+            try:
+                if k32.GetFileType(dup) != 2:                                       # 2 = périphérique caractère
+                    continue
+                out = []
+                th = threading.Thread(target=_nt_name, args=(dup, out), daemon=True)
+                th.start()
+                th.join(0.4)
+                if out and out[0].lower() == target:
+                    found.add(e.pid)
+            finally:
+                k32.CloseHandle(dup)
+        for ph in opened.values():
+            if ph:
+                k32.CloseHandle(ph)
+
+        res = []
+        for pid in sorted(found):
+            name = '?'
+            hq = k32.OpenProcess(0x1000, False, pid)                                # PROCESS_QUERY_LIMITED_INFORMATION
+            if hq:
+                sz = W.DWORD(1024)
+                nb = ctypes.create_unicode_buffer(1024)
+                if k32.QueryFullProcessImageNameW(hq, 0, nb, ctypes.byref(sz)):
+                    name = os.path.basename(nb.value)
+                k32.CloseHandle(hq)
+            res.append((pid, name))
+        return res
+    except Exception:
+        return []
+
+
+def _f4lps_port_busy_message(port, err):
+    """Message lisible quand un port COM ne s'ouvre pas : nomme le programme qui le tient, si on le trouve."""
+    low = str(err).lower()
+    if not any(k in low for k in ('permissionerror', 'access is denied', 'accès refusé', 'acces refuse', 'accès est refusé')):
+        return None
+    holders = _f4lps_port_holders(port)
+    if holders:
+        who = ', '.join(f"{n} (PID {p})" for p, n in holders)
+        return (f"Port {port} déjà utilisé par : {who}. "
+                f"Ferme ce programme (ou déconnecte-le de la radio), ou choisis un autre port.")
+    return (f"Port {port} déjà utilisé par un autre logiciel (HRD, Win4Icom, DXLog, une autre copie de MultiDigi "
+            f"ou de CW Terminal…) que je n'ai pas pu identifier : un service ou un programme lancé en "
+            f"administrateur ne peut pas être inspecté. Ferme-le puis réessaie. Détail : {err}")
+
+
 class RadioController:
     def __init__(self):
         self.connection_type=None; self.serial_port=None
@@ -26525,7 +27088,9 @@ class RadioController:
             _hint = "adresse CI-V/protocole" if protocol == 'icom' else "protocole (CAT ancien vs ASCII)"
             return True, (f"Connecté {port} {baudrate}bd — ⚠️ aucun octet reçu de la radio "
                            f"(vérifie baudrate/{_hint} et que le câble CAT est bien relié) — {dtr_rts_note}")
-        except Exception as e: return False,str(e)
+        except Exception as e:
+            _busy = _f4lps_port_busy_message(port, e)
+            return False, (_busy or str(e))
 
     def connect_omnirig(self, rig_number=1):
         try:
@@ -29172,6 +29737,7 @@ class RadioCatWindow(QDialog):
         QApplication.processEvents()
 
         found = None
+        busy = []                                              # ports occupés par un autre programme
         for p in _lp.comports():
             dev = p.device
             try:
@@ -29202,7 +29768,9 @@ class RadioCatWindow(QDialog):
                 if ok:
                     found = dev
                     break
-            except Exception:
+            except Exception as _e:
+                if _f4lps_port_busy_message(dev, _e):
+                    busy.append(dev)
                 continue
 
         self._btn_cat_auto.setEnabled(True)
@@ -29213,7 +29781,14 @@ class RadioCatWindow(QDialog):
             self._cat_status.setText(f"✅ Radio détectée sur {found} — clique CONNECTER")
             self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
         else:
-            self._cat_status.setText("❌ Aucune radio trouvée (vérifie protocole/baudrate" + (" /CI-V" if proto == 'icom' else "") + ")")
+            _txt = "❌ Aucune radio trouvée (vérifie protocole/baudrate" + (" /CI-V" if proto == 'icom' else "") + ")"
+            if busy:
+                _det = []
+                for _b in busy[:4]:
+                    _h = _f4lps_port_holders(_b, budget_s=3.0)
+                    _det.append(f"{_b} ← {', '.join(n for _p, n in _h)}" if _h else _b)
+                _txt += " — ports occupés par un autre programme : " + " ; ".join(_det)
+            self._cat_status.setText(_txt)
             self._cat_status.setStyleSheet("color:#ff4444;font-weight:bold;font-size:8pt;")
 
     def _toggle_cat(self):
@@ -29240,8 +29815,12 @@ class RadioCatWindow(QDialog):
             force_dtr_rts = bool(self._force_dtr_rts_chk.isChecked()) and proto == 'icom'
             ok, msg = rc.connect_serial(port, baud, proto, addr, force_dtr_rts=force_dtr_rts)
             if ok:
-                self._cat_status.setText(f"✅ {msg}")
-                self._cat_status.setStyleSheet("color:#00ff66;font-weight:bold;font-size:8pt;")
+                # V8.5 F4LPS : « Connecté … ⚠️ aucun octet reçu » = le port s'est ouvert mais la radio ne répond
+                # pas. Ce n'est PAS une connexion réussie : statut orange, pas le ✅ vert trompeur.
+                _warn = '⚠️' in str(msg)
+                self._cat_status.setText(f"{'⚠️' if _warn else '✅'} {msg.replace('⚠️ ', '') if _warn else msg}")
+                self._cat_status.setStyleSheet(
+                    "color:#ffaa44;font-weight:bold;font-size:8pt;" if _warn else "color:#00ff66;font-weight:bold;font-size:8pt;")
                 self._btn_cat.setText("🔌 DÉCONNECTER")
                 self.main._restart_freq_poll()
                 # V8.4.1 F4LPS : mémorise le port CAT qui vient de marcher.
@@ -38697,8 +39276,9 @@ class PSKMainWindow(QMainWindow):
             addr  = int(at.split("x")[1].split(" ")[0],16) if "0x" in at else 0x94
             ok,msg = self.radio_ctrl.connect_serial(port,baud,proto,addr)
             if ok:
-                self.cat_status.setText(f"✅ {msg}")
-                self.cat_status.setStyleSheet("color:#00ff66;font-weight:bold;")
+                _warn = '⚠️' in str(msg)                       # port ouvert mais radio muette : pas un vrai succès
+                self.cat_status.setText(f"{'⚠️' if _warn else '✅'} {msg.replace('⚠️ ', '') if _warn else msg}")
+                self.cat_status.setStyleSheet("color:#ffaa44;font-weight:bold;" if _warn else "color:#00ff66;font-weight:bold;")
                 self.btn_cat.setText("🔌 DÉCONNECTER")
                 self._restart_freq_poll()
             else:

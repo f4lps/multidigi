@@ -152,6 +152,20 @@ deux logiciels doivent utiliser le même numéro).
 
 ---
 
+## Port COM occupé, ou radio qui ne répond pas
+
+Un port COM ne peut être ouvert que par **un seul logiciel à la fois** (HRD, Win4Icom, DXLog, OmniRig,
+CW Terminal, une autre copie de MultiDigi…).
+
+- **« Port COMx déjà utilisé par : programme.exe (PID …) »** : MultiDigi a retrouvé le programme qui tient
+  le port. Ferme-le (ou déconnecte-le de la radio), puis reclique sur CONNECTER.
+- **« … que je n'ai pas pu identifier »** : le programme est un service ou tourne en administrateur, MultiDigi
+  ne peut pas l'inspecter. Ferme HRD, Win4Icom, DXLog, OmniRig et les autres logiciels CAT, puis réessaie.
+- **Statut orange « ⚠️ … aucun octet reçu de la radio »** : le port s'est ouvert mais la radio ne répond pas.
+  Ce n'est **pas** une connexion réussie. Vérifie le port (avec Win4Icom, le port **partenaire** de son AUX :
+  il en tient une extrémité, tu te branches sur l'autre), le baudrate, l'adresse CI-V et que la radio est allumée.
+- Le bouton **🔍 Auto-détecter le port** signale maintenant aussi les ports occupés et par quel programme.
+
 ## En cas de problème
 
 Le bouton **CONNECTER** affiche toujours un message de diagnostic précis

@@ -1,5 +1,63 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ⏩ Session du 20 septembre 2026 — moteur CW « FIT » + diagnostics de connexion (version 8.5.0, NON publiée)
+
+**Où :** branche locale `cw-fit-et-connexions` (créée depuis `main` = 8.4.7 ; **rien n'est fusionné dans `main`,
+rien n'est poussé, aucune release publiée**). `PROGRAM_VERSION_TAG` et `MyAppVersion` sont déjà à **8.5.0**.
+
+### Pourquoi
+Mêmes problèmes que sur CW Terminal : décodage CW faible (rafales de E/T/I, lettres perdues, échec sur QSB et
+manipulation à la main) et connexions CAT peu lisibles. Ce qui a été mis au point et validé dans CW Terminal
+V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `f4lps/CW-Terminal`) a été repris ici.
+
+### Ce qui a changé (fichier unique `MultiDigi_FINAL_JS8_20260904.py`)
+1. **Nouveau mode CW « CW FIT »** (`CW_MODES`, choisi **par défaut** pour la famille CW ; NEXT et CLASSIC restent
+   disponibles). Moteur `CWFitDecoder` + `CWFitBackend` (juste avant `CW_MODES`), branché dans `_CWModemAdapter`.
+   Principe : au lieu de décider « point/trait » élément par élément, on ajuste sur ~7 s d'enveloppe le triplet
+   (seuil, longueur du dit, biais de front) qui colle le mieux à la grammaire Morse ; le résidu sert de confiance,
+   le bruit n'émet rien. Réparation des creux de fading, hystérésis large (queue des traits), correction à un
+   élément près (`......` → `5`). Code copié de `cw_fit_decoder.py` de CW Terminal (identifiants renommés).
+   - `_CWModemAdapter.reset()` : ne remplace plus le moteur FIT par un `CWSkimmerV3Decoder`.
+   - ⚠️ Constat NON corrigé : `reset()` remplace *toujours* CLASSIC/NEXT par un `CWSkimmerV3Decoder` (probable bug
+     historique, laissé tel quel pour ne pas changer le comportement des anciens modes).
+2. **Port COM occupé → on nomme le coupable** : `_f4lps_port_holders()` + `_f4lps_port_busy_message()` (juste avant
+   `class RadioController`). `connect_serial` renvoie « Port COM13 déjà utilisé par : CW_Terminal.exe (PID …) ».
+   Méthode : `QueryDosDeviceW` (COMx → nom NT) + table des handles système, restreinte aux handles de type
+   « File » puis `GetFileType == CHAR`. **Limite** : les services et programmes lancés en administrateur ne sont
+   pas inspectables (~170 processus sur 365 sur cette machine) → message générique honnête dans ce cas.
+3. **Statut orange** (au lieu du ✅ vert) quand `connect_serial` renvoie « ⚠️ aucun octet reçu » : port ouvert
+   mais radio muette ≠ connexion réussie (deux panneaux : `_toggle_cat` des Réglages PSK et celui de la fenêtre).
+4. **Auto-détection du port** : signale les ports occupés et par quel programme.
+5. README, `CAT_SETUP.md` (section « Port COM occupé, ou radio qui ne répond pas ») mis à jour.
+
+### Mesures (pour ne pas les refaire)
+- Banc synthétique (mêmes signaux que CW Terminal, 2 essais/scénario), erreur moyenne par caractère :
+  **FIT ≈ 4 %**, NEXT ≈ 32 %, CLASSIC ≈ 40 % (`CW_Terminal_Dev/bench_multidigi.py`). Mon générateur est idéal.
+- **Signal réel** (240 s, station SM5X, vérité = affichage de CW Skimmer) : `TEST SM5X` exact **15** fois avec FIT,
+  **4** avec NEXT, **0** avec CLASSIC (`CW_Terminal_Dev/real_md.py`, segment `fixed_seg.npy`).
+- Tests : `CW_Terminal_Dev/test_md_cwfit.py` (adaptateur, registre, reset, 44,1 et 48 kHz, bruit pur) et
+  `CW_Terminal_Dev/test_md_connect.py` (détection du coupable, messages, radio absente/présente sur la paire
+  virtuelle libre COM16/COM17, **aucune vraie radio touchée**) : tout passe. Fenêtre `PSKMainWindow` vérifiée
+  en hors-écran : famille CW → modes `CW FIT / CW CLASSIC / CW NEXT`, moteur actif `CWFitBackend`.
+
+### Montage matériel de l'utilisateur (utile pour tout diagnostic CAT)
+- Radio IC-7300 (CI-V `0x94`) pilotée **à distance** par **Win4Icom Suite** (`ConnectionType=NETWORK`), qui expose
+  un serveur « HRD » sur le port 7809 et des ports auxiliaires côté **VSPD/Eltima** : paires COM10↔11, 12↔13,
+  14↔15, 16↔17. Win4Icom tient COM10/COM12/COM14 (AUX1/2/3) ; **les logiciels se branchent sur l'autre extrémité**
+  (COM13 pour MultiDigi et CW Terminal). COM16/COM17 sont libres (utilisables pour des tests avec une fausse radio).
+- `C:\Users\14frs\psk_terminal_settings.json` est le fichier de réglages **réellement utilisé** (celui du dossier du
+  programme est ancien) : `cat_settings` = COM13, 57600, icom, `0x94`, `force_dtr_rts` faux.
+- Piège vécu : deux logiciels (CW Terminal / MultiDigi) ne peuvent pas ouvrir COM13 en même temps.
+
+### Reste à faire / décisions à prendre avec l'utilisateur
+- **Tester en conditions réelles** (sa radio + un signal CW) : choisir « CW FIT » dans la liste des modes CW.
+  Son réglage mémorisé est `mode = "CW NEXT"` : il **ne bascule pas tout seul** sur FIT.
+- Si validé : fusionner la branche dans `main`, reconstruire (commande de reconstruction plus bas ; 30-90 min),
+  tester `dist\MultiDigi\MultiDigi.exe`, publier `v8.5.0` (voir procédure ; l'API GitHub permet aussi de créer la
+  release et d'envoyer l'installeur avec le jeton `repo` du gestionnaire d'identifiants Git — **seulement avec
+  l'accord explicite de l'utilisateur**, puis toujours vérifier via `releases/latest`).
+- Idée non faite : porter dans CW Terminal (V1.9.2) la détection du programme qui tient le port.
+
 ## Fichier à utiliser
 
 `MultiDigi_FINAL_JS8_20260904.py` — version actuelle du code : **8.4.5**
