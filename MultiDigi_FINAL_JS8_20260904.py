@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.0"
+PROGRAM_VERSION_TAG = "8.5.1"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -29968,6 +29968,40 @@ class RadioCatWindow(QDialog):
         gl.addWidget(self._cat_status, 6,0,1,2)
         lay.addWidget(g1)
 
+        # V8.5.1 F4LPS - options « mode radio automatique » et « CW par le manipulateur ».
+        g_opt = self._grp("🎛  Mode radio et CW")
+        ol = QVBoxLayout(g_opt); ol.setContentsMargins(10,14,10,8); ol.setSpacing(4)
+        self._chk_auto_mode = QCheckBox("Corriger le mode radio automatiquement (seulement si la radio le confirme)")
+        self._chk_auto_mode.setToolTip(
+            "Quand tu changes de famille, MultiDigi remet la radio en USB si elle est en CW, AM, FM ou RTTY"
+            "\n(en CW, une radio ignore l'audio : elle passerait en émission sans morse)."
+            "\nUSB, LSB et DATA ne sont jamais modifiés. Ne fait rien si la radio ne peut pas confirmer le changement.")
+        self._chk_auto_mode.setChecked(bool(_cs.get('auto_mode', True)))
+        ol.addWidget(self._chk_auto_mode)
+        self._chk_native_cw = QCheckBox("CW par le manipulateur de la radio (Icom, CI-V) — BK-IN requis")
+        self._chk_native_cw.setToolTip(
+            "Le morse est fabriqué par la radio (comme CW Terminal) au lieu d'une note audio."
+            "\nIcom uniquement. Avec HRD / FLRig / OmniRig : le Port COM ci-dessus doit être un port CI-V"
+            "\nlibre qui va vers la radio (ex. port auxiliaire de Win4Icom), pas le port tenu par HRD."
+            "\nLa radio doit être en CW avec BK-IN activé. Décoché : le CW part en audio (radio en USB).")
+        self._chk_native_cw.setChecked(bool(_cs.get('native_cw', False)))
+        ol.addWidget(self._chk_native_cw)
+        def _save_opts(_=None):
+            try:
+                cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                cs['auto_mode'] = bool(self._chk_auto_mode.isChecked())
+                cs['native_cw'] = bool(self._chk_native_cw.isChecked())
+                self.main._cat_settings = cs
+                self.main._civ_aux_retry_at = 0.0
+                if not cs['native_cw']:
+                    self.main.radio_ctrl.cw_close_aux()
+                self.main._save_settings()
+            except Exception:
+                pass
+        self._chk_auto_mode.toggled.connect(_save_opts)
+        self._chk_native_cw.toggled.connect(_save_opts)
+        lay.addWidget(g_opt)
+
         # ── HRD ───────────────────────────────────────────────────────────────
         g2 = self._grp("🌐  HRD IP Server")
         g2l = QGridLayout(g2); g2l.setContentsMargins(10,14,10,8)
@@ -36754,96 +36788,124 @@ class PSKMainWindow(QMainWindow):
             pass
         self._start_tx(test_text)
 
+    def _radio_log(self, msg):
+        """Journal ~/multidigi_radio.log : ce que MultiDigi a décidé pour le mode radio / le CW (à joindre à un rapport)."""
+        try:
+            with open(os.path.join(os.path.expanduser('~'), 'multidigi_radio.log'), 'a', encoding='utf-8') as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        except Exception:
+            pass
+
+    def _opt(self, key, default):
+        return bool((getattr(self, '_cat_settings', {}) or {}).get(key, default))
+
     def _open_civ_aux(self):
-        """Ouvre (si besoin) la liaison CI-V auxiliaire d'après le panneau RADIO CAT. Retourne (ok, message)."""
+        """Liaison CI-V auxiliaire (HRD/FLRig/OmniRig) : SEULEMENT si « CW par le manipulateur » est coché, avec le port
+        du panneau RADIO CAT. Un échec n'est pas retenté pendant 60 s (la recherche du programme fautif prend du temps).
+        Retourne (ok, message)."""
         rc = self.radio_ctrl
         if rc.cw_link():
             return True, ''
+        if not self._opt('native_cw', False):
+            return False, "CW par le manipulateur non activé"
         cs = dict(getattr(self, '_cat_settings', {}) or {})
-        if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom'                 or not cs.get('port'):
+        if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom' \
+                or not cs.get('port'):
             return False, "pas de liaison CI-V disponible"
+        if time.time() < float(getattr(self, '_civ_aux_retry_at', 0.0) or 0.0):
+            return False, getattr(self, '_civ_aux_last_msg', "liaison CI-V indisponible")
         m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
         civ = int(m.group(1), 16) if m else 0x94
         try:
             baud = int(cs.get('baud', 19200))
         except Exception:
             baud = 19200
-        return rc.cw_open_aux(str(cs['port']), baud, civ)
+        ok, msg = rc.cw_open_aux(str(cs['port']), baud, civ)
+        self._radio_log(f"liaison CI-V auxiliaire {cs.get('port')} : {'OK' if ok else 'ECHEC'} — {msg}")
+        if not ok:
+            self._civ_aux_retry_at = time.time() + 60.0
+            self._civ_aux_last_msg = msg
+        return ok, msg
 
     def _set_radio_mode(self, want):
-        """Met la radio en 'CW' ou 'USB' et VÉRIFIE par relecture. Priorité au CI-V (fiable), sinon CAT du logiciel
-        (HRD, OmniRig, FLRig). Retourne True seulement si la radio a confirmé. Ne fait jamais d'émission."""
+        """Met la radio dans un mode utilisable et le VÉRIFIE. Retourne True (confirmé / déjà bon), False (échec),
+        None (rien tenté : aucun moyen de vérifier, la radio n'est PAS touchée).
+        want='CW'  : mode CW (envoi par le manipulateur) ;
+        want='USB' : mode compatible avec l'audio — USB, LSB et DATA sont laissés tels quels ; seuls CW, AM, FM,
+                     RTTY… sont ramenés en USB. Jamais de changement non vérifiable (HRD sans liaison CI-V)."""
         rc = self.radio_ctrl
-        transient = not rc.cw_link()
         ok_link, msg = self._open_civ_aux()
         link = rc.cw_link() if ok_link else None
-        try:
-            if link:
-                sp, civ = link
-                if RadioController.civ_read_mode(sp, civ) == want:
+        if link:                                              # CI-V : lecture puis écriture vérifiée
+            sp, civ = link
+            cur = RadioController.civ_read_mode(sp, civ)
+            self._radio_log(f"CI-V : mode lu = {cur or '?'} ; demandé = {want}")
+            if want == 'CW':
+                if cur == 'CW':
                     return True
-                if rc.civ_set_mode(want, sp, civ):
-                    return True
-            # secours : commande du logiciel CAT, puis relecture
+            elif cur in ('USB', 'LSB'):
+                return True
+            elif not cur:
+                return None                                   # la radio ne répond pas : on ne touche à rien
+            res = bool(rc.civ_set_mode('CW' if want == 'CW' else 'USB', sp, civ))
+            self._radio_log(f"CI-V : passage en {want} -> {'confirmé' if res else 'NON confirmé'}")
+            return res
+        if rc.connection_type in ('omnirig', 'flrig'):        # lecture directe fiable : on peut vérifier
+            cur = str(rc.get_mode_name() or '').upper()
+            self._radio_log(f"{rc.connection_type} : mode lu = {cur or '?'} ; demandé = {want}")
+            if not cur:
+                return None
+            if (want == 'CW' and cur.startswith('CW')) or (want == 'USB' and cur.startswith(('USB', 'LSB', 'DATA', 'DIG'))):
+                return True
             (rc.set_mode_cw if want == 'CW' else rc.set_mode_usb)()
-            if rc.connection_type == 'hrd':
-                try:
-                    c = rc._hrd_client
-                    names = [x.strip() for x in str(c._send('get dropdown-list {Mode}') or '').split(',') if x.strip()]
-                    if want in names:
-                        c.send_simple_command('set dropdown {Mode} %s %d' % (want, names.index(want) + 1))
-                except Exception:
-                    pass
-            end = time.time() + 2.5
+            end = time.time() + 2.0
             while time.time() < end:
-                time.sleep(0.4)
-                if str(rc.get_mode_name() or '').upper().startswith(want):
+                time.sleep(0.3)
+                now = str(rc.get_mode_name() or '').upper()
+                if (want == 'CW' and now.startswith('CW')) or (want == 'USB' and now.startswith(('USB', 'LSB', 'DATA'))):
+                    self._radio_log(f"{rc.connection_type} : passage en {want} confirmé")
                     return True
+            self._radio_log(f"{rc.connection_type} : passage en {want} NON confirmé")
             return False
-        finally:
-            if transient and want != 'CW' and rc.cw_link() and rc.connection_type != 'serial':
-                rc.cw_close_aux()
+        self._radio_log(f"mode radio non modifié (connexion {rc.connection_type}, pas de liaison CI-V) — demandé = {want}")
+        return None
 
     def _cw_native_prepare(self):
-        """CW natif possible ? Ouvre au besoin un port CI-V auxiliaire (HRD/FLRig/OmniRig), vérifie que la radio répond
-        et la met en mode CW (confirmé). Retourne True si l'envoi natif est prêt, False (repli audio) sinon."""
+        """CW par le manipulateur de la radio possible ? Seulement si l'option est cochée, la radio répond en CI-V et
+        est CONFIRMÉE en mode CW. Sinon False (le CW part en audio, comme avant)."""
         rc = getattr(self, 'radio_ctrl', None)
-        if rc is None or not getattr(rc, 'connected', False):
+        if rc is None or not getattr(rc, 'connected', False) or not self._opt('native_cw', False):
             return False
-        if not rc.cw_link():
-            ok, msg = self._open_civ_aux()
-            self._set_status(("🔗 " if ok else "⚠️ CW natif indisponible : ") + msg)
-            if not ok:
-                return False
-        if not self._set_radio_mode('CW'):
+        ok, msg = self._open_civ_aux()
+        if not ok:
+            self._set_status("⚠️ CW par la radio indisponible : " + msg + " — CW en audio")
+            return False
+        if self._set_radio_mode('CW') is not True:
             self._set_status("⚠️ La radio n'a pas confirmé le mode CW : envoi en audio")
             return False
         self._set_status("🟠 Radio en mode CW (le morse est fabriqué par la radio)")
         return True
 
     def _apply_radio_mode_for_family(self, fam=None):
-        """Famille CW -> radio en mode CW (envoi natif) ; toutes les autres familles -> USB.
-        Sans radio connectée : ne fait rien. Ce ne sont que des changements de mode, jamais d'émission."""
+        """Changement de famille / connexion : corrige le mode radio SI on peut le vérifier. Jamais d'émission."""
         try:
             rc = getattr(self, 'radio_ctrl', None)
-            if rc is None or not getattr(rc, 'connected', False):
+            if rc is None or not getattr(rc, 'connected', False) or not self._opt('auto_mode', True):
                 return
-            fam = fam or getattr(self, '_family', '')
             if getattr(self, '_tx_active', False):
                 return
-            if fam == 'CW':
-                if not self._cw_native_prepare():
-                    if self._set_radio_mode('USB'):
-                        self._set_status("🔵 CW audio (pas de liaison CI-V) : radio passée en USB")
-                    else:
-                        self._set_status("⚠️ Mode radio non confirmé : vérifie USB / CW sur la radio")
-            else:
-                if self._set_radio_mode('USB'):
-                    self._set_status(f"🔵 Radio en USB pour {fam}")
-                else:
-                    self._set_status(f"⚠️ Mode radio non confirmé pour {fam} : vérifie USB sur la radio")
+            fam = fam or getattr(self, '_family', '')
+            if fam == 'CW' and self._opt('native_cw', False):
+                self._cw_native_prepare()
+                return
+            res = self._set_radio_mode('USB')
+            if res is False:
+                self._set_status(f"⚠️ Mode radio non confirmé pour {fam} : vérifie USB sur la radio")
+            elif res is True:
+                self._set_status(f"🔵 Radio en mode compatible pour {fam}")
         except Exception as e:
             print(f"⚠️ mode radio automatique : {type(e).__name__}: {e}")
+            self._radio_log(f"erreur mode automatique : {type(e).__name__}: {e}")
 
     def _start_tx_cw_native(self):
         """Lance l'émission CW par le manipulateur de la radio (à la place du thread audio)."""
@@ -36881,11 +36943,19 @@ class PSKMainWindow(QMainWindow):
         clicked = box.clickedButton()
         if clicked is b_usb:
             try:
-                ok = bool(self.radio_ctrl.set_mode_usb())
+                res = self._set_radio_mode('USB')
+                if res is None:                              # pas de moyen de vérifier : commande simple, puis on relit
+                    self.radio_ctrl.set_mode_usb()
+                    time.sleep(1.5)
+                    res = not str(self.radio_ctrl.get_mode_name() or '').upper().startswith('CW')
             except Exception:
-                ok = False
-            time.sleep(0.3)                                  # laisse la radio appliquer le mode avant le PTT
-            self._set_status("🔵 Radio passée en USB pour le CW audio" if ok else "⚠️ Passage en USB non confirmé")
+                res = False
+            if not res:
+                QMessageBox.warning(self, "Mode radio", "La radio est restée en CW : MultiDigi ne peut pas la passer en USB "
+                                    "(ni le vérifier). Passe-la en USB toi-même, puis relance l'émission : en CW elle "
+                                    "émettrait sans envoyer de morse.")
+                return False
+            self._set_status("🔵 Radio passée en USB pour le CW audio")
             return True
         return clicked is b_go
 

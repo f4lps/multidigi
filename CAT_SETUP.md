@@ -166,30 +166,27 @@ CW Terminal, une autre copie de MultiDigi…).
   il en tient une extrémité, tu te branches sur l'autre), le baudrate, l'adresse CI-V et que la radio est allumée.
 - Le bouton **🔍 Auto-détecter le port** signale maintenant aussi les ports occupés et par quel programme.
 
-## CW : envoi par le manipulateur de la radio, et mode radio automatique (8.5.0)
+## CW par le manipulateur de la radio et mode radio automatique (8.5.1)
 
-Depuis la 8.5.0, MultiDigi envoie le CW **comme CW Terminal** : le texte est confié au **manipulateur interne de la
-radio** (commande CI-V `0x17`), c'est la radio qui fabrique le morse. Ce n'est plus une note audio.
+Deux options, dans **Réglages → RADIO CAT → « Mode radio et CW »** :
 
-**Le mode de la radio suit la famille choisie :**
-- famille **CW** → la radio passe **en mode CW** toute seule ;
-- **toutes les autres familles** (PSK, JS8, Olivia, RTTY…) → la radio passe **en USB** toute seule.
+**1. Corriger le mode radio automatiquement** (coché par défaut)
+Quand tu changes de famille, MultiDigi remet la radio en **USB** si elle est en **CW, AM, FM ou RTTY** (en CW, une
+radio ignore l'audio : elle passe en émission **sans envoyer de morse**). **USB, LSB et DATA ne sont jamais modifiés.**
+MultiDigi ne change le mode que s'il peut **vérifier** le résultat : liaison CI-V (Icom), OmniRig ou FLRig. Avec HRD
+seul (sans liaison CI-V), il **ne touche pas** au mode : passe la radio en USB toi-même.
 
-Le changement a lieu au changement de famille et à la connexion du CAT. Ce ne sont que des changements de mode,
-jamais des émissions.
+**2. CW par le manipulateur de la radio** (décoché par défaut, Icom uniquement)
+Le texte est confié au **manipulateur interne de la radio** (CI-V `0x17`), comme CW Terminal : c'est la radio qui
+fabrique le morse. Il faut :
+- une radio **Icom**, en **CW** avec **BK-IN** activé (MultiDigi passe la radio en CW et vérifie qu'elle l'a fait) ;
+- avec la connexion série directe : rien d'autre ;
+- avec HRD, FLRig ou OmniRig : le **Port COM du panneau RADIO CAT** doit être un port CI-V **libre** qui va vers la
+  radio (par exemple le port auxiliaire de Win4Icom), **pas** le port que HRD tient déjà.
+Si la radio ne répond pas ou ne confirme pas le mode CW, MultiDigi envoie le CW **en audio** (radio en USB).
 
-**Ce qu'il faut pour le CW natif :**
-- une radio **Icom** avec une liaison CI-V : la connexion série directe, **ou** (avec HRD, FLRig ou OmniRig) le **port
-  CAT enregistré dans le panneau RADIO CAT** (par exemple COM13 avec Win4Icom), que MultiDigi ouvre en plus pour le
-  CW et dont il vérifie qu'il répond ;
-- la radio en **BK-IN** (semi ou full) : c'est elle qui passe en émission, MultiDigi ne commande pas le PTT ;
-- un texte de 30 caractères au plus par message : MultiDigi le découpe tout seul par mots.
-
-Le bouton **ABORT** envoie l'arrêt du message en cours à la radio.
-
-**Repli audio :** pour une radio non-Icom, ou si aucune liaison CI-V n'est possible, MultiDigi envoie le CW en
-audio comme avant, et met la radio en **USB** (en mode CW une radio ignore l'audio : elle passerait en émission
-sans morse). En USB, la fréquence émise est la fréquence affichée plus la hauteur de la note audio.
+Le bouton **ABORT** arrête le message en cours. Tout ce que MultiDigi décide pour le mode radio est écrit dans
+`multidigi_radio.log` (dossier utilisateur) : à joindre à un rapport de problème.
 
 ## En cas de problème
 

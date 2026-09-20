@@ -4,7 +4,7 @@
 ; traces à côté de l'exécutable sans problème de permission.
 
 #define MyAppName "MultiDigi"
-#define MyAppVersion "8.5.0"
+#define MyAppVersion "8.5.1"
 #define MyAppPublisher "F4LPS"
 #define MyAppURL "https://github.com/f4lps/multidigi"
 #define MyAppExeName "MultiDigi.exe"
