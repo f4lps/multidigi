@@ -41,7 +41,8 @@ FSK/PSK réels).
   ramenée en USB pour les modes audio ; USB, LSB et DATA ne sont jamais modifiés
 - **Décodage CW plus lisible** : séparation des mots adaptée à l'espacement de l'opérateur, lettres collées
   séparées, plus de « ? » parasites
-- **Tracker** : la carte s'affiche sans accélération GPU (évite les fermetures brutales selon le pilote graphique) ;
+- **Tracker** : si la carte web plante au démarrage, le Tracker s'ouvre ensuite avec la grille locale au lieu de
+  replanter ; la carte s'affiche sans accélération GPU (évite les fermetures brutales selon le pilote graphique) ;
   journal de plantage dans `multidigi_crash.log`
 - Connexion CAT plus claire : quand un port COM est déjà utilisé, MultiDigi **nomme le logiciel
   fautif** (ex. « COM13 déjà utilisé par CW_Terminal.exe (PID 1234) »), et affiche en **orange**

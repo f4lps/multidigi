@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.1"
+PROGRAM_VERSION_TAG = "8.5.2"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -36832,9 +36832,13 @@ class PSKMainWindow(QMainWindow):
         if not self._opt('native_cw', True):
             return False, "CW par le manipulateur non activé"
         cs = dict(getattr(self, '_cat_settings', {}) or {})
-        if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom' \
-                or not cs.get('port'):
-            return False, "pas de liaison CI-V disponible"
+        if rc.connection_type not in ('hrd', 'flrig', 'omnirig'):
+            return False, "radio non connectée par HRD / FLRig / OmniRig / série Icom"
+        if str(cs.get('protocol', 'icom')) != 'icom':
+            return False, "le CW par la radio n'existe qu'en CI-V (radio Icom) : le protocole RADIO CAT n'est pas Icom"
+        if not cs.get('port'):
+            return False, ("aucun Port COM CI-V enregistré : dans RADIO CAT, choisis un port CI-V libre vers la radio "
+                           "(ex. port auxiliaire de Win4Icom) et clique CONNECTER une fois")
         if time.time() < float(getattr(self, '_civ_aux_retry_at', 0.0) or 0.0):
             return False, getattr(self, '_civ_aux_last_msg', "liaison CI-V indisponible")
         m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
@@ -36897,18 +36901,27 @@ class PSKMainWindow(QMainWindow):
         """CW par le manipulateur de la radio possible ? Seulement si l'option est cochée, la radio répond en CI-V et
         est CONFIRMÉE en mode CW. Sinon False (le CW part en audio, comme avant)."""
         rc = getattr(self, 'radio_ctrl', None)
-        if rc is None or not getattr(rc, 'connected', False) or not self._opt('native_cw', True):
+        self._cw_native_reason = ''
+        if rc is None or not getattr(rc, 'connected', False):
+            self._cw_native_reason = "la radio n'est pas connectée au CAT"
+            return False
+        if not self._opt('native_cw', True):
+            self._cw_native_reason = "l'option « CW par le manipulateur de la radio » est décochée (RADIO CAT)"
             return False
         ok, msg = self._open_civ_aux()
         if not ok:
+            self._cw_native_reason = msg
+            self._radio_log("CW par la radio indisponible : " + msg)
             self._set_status("⚠️ CW par la radio indisponible : " + msg + " — CW en audio")
             return False
         link = self.radio_ctrl.cw_link()
         if link and RadioController.civ_read_breakin(link[0], link[1]) == 0:
+            self._cw_native_reason = "BK-IN désactivé sur la radio (le manipulateur n'émettrait pas) : active BK-IN"
             self._radio_log("BK-IN désactivé sur la radio : CW natif impossible, repli audio")
             self._set_status("⚠️ BK-IN désactivé sur la radio (le manipulateur n'émettrait pas) : active BK-IN, ou le CW part en audio")
             return False
         if self._set_radio_mode('CW') is not True:
+            self._cw_native_reason = "la radio n'a pas confirmé le passage en mode CW"
             self._set_status("⚠️ La radio n'a pas confirmé le mode CW : envoi en audio")
             return False
         self._set_status("🟠 Radio en mode CW (le morse est fabriqué par la radio)")
@@ -36963,7 +36976,9 @@ class PSKMainWindow(QMainWindow):
         box.setText("La radio est en mode <b>CW</b>.<br><br>MultiDigi envoie le CW sous forme de <b>note audio</b> : "
                     "en mode CW la radio ignore l'audio et passerait en émission <b>sans envoyer de morse</b>.<br><br>"
                     "Passer la radio en <b>USB</b> ? (En USB, la fréquence émise = fréquence affichée + hauteur de la "
-                    "note audio, par exemple +700 Hz.)")
+                    "note audio, par exemple +700 Hz.)"
+                    + ("<br><br><i>CW par la radio indisponible : " + str(getattr(self, '_cw_native_reason', '')) + "</i>"
+                       if getattr(self, '_cw_native_reason', '') else ""))
         b_usb = box.addButton("Passer en USB et émettre", QMessageBox.AcceptRole)
         b_go = box.addButton("Émettre quand même", QMessageBox.DestructiveRole)
         box.addButton("Annuler", QMessageBox.RejectRole)
@@ -43311,9 +43326,39 @@ class GridTrackerWindow(QMainWindow):
         ):
             _live_lay.addWidget(_w)
         _live_lay.addStretch(1)
-        self.real_map = RealMapWidget() if HAVE_WEBENGINE else None
-        self.live_map = RealMapWidget() if HAVE_WEBENGINE else None
-        self.prop_map = RealMapWidget() if HAVE_WEBENGINE else None
+        # V8.5.2 F4LPS — disjoncteur : la carte web (Chromium) plante au démarrage chez certains PC et ferme tout le
+        # programme. On pose un fichier-témoin AVANT de la créer et on l'efface une fois la page chargée ; s'il est
+        # encore là au lancement suivant, c'est que ça a planté : on n'ouvre alors que la grille locale.
+        self._web_disabled_reason = ''
+        _web_ok = bool(HAVE_WEBENGINE)
+        _flag = os.path.join(os.path.expanduser('~'), 'multidigi_map_crash.flag')
+        if _web_ok:
+            try:
+                if os.path.exists(_flag):
+                    _web_ok = False
+                    self._web_disabled_reason = (
+                        "La carte web a planté au dernier lancement du Tracker : elle est désactivée (grille locale). "
+                        "Pour réessayer, supprime le fichier " + _flag)
+                else:
+                    with open(_flag, 'w', encoding='utf-8') as _f:
+                        _f.write(time.strftime('%Y-%m-%d %H:%M:%S') + " carte web en cours de création")
+            except Exception:
+                pass
+        self.real_map = RealMapWidget() if _web_ok else None
+        self.live_map = RealMapWidget() if _web_ok else None
+        self.prop_map = RealMapWidget() if _web_ok else None
+        if self.real_map is not None:
+            def _map_ok(_flag=_flag):
+                try:
+                    if os.path.exists(_flag):
+                        os.remove(_flag)
+                except Exception:
+                    pass
+            QTimer.singleShot(6000, _map_ok)                       # les plantages de démarrage arrivent dans les premières secondes
+            try:
+                QApplication.instance().aboutToQuit.connect(_map_ok)   # fermeture normale : pas de fausse alerte
+            except Exception:
+                pass
         self.map_widget = GridMapWidget(self.store)
         self.map_widget.set_home_grid(self.settings.get("my_grid", ""))
         self.map_widget.field_clicked.connect(self._on_field_clicked)
@@ -43479,8 +43524,11 @@ class GridTrackerWindow(QMainWindow):
             self.btn_prop_map.setEnabled(False)
             self.btn_pskr.setEnabled(False)
             self.btn_world.setEnabled(False)
-            self.btn_real_map.setToolTip("PyQtWebEngine non installé : pip install PyQtWebEngine")
-            self.btn_live_map.setToolTip("PyQtWebEngine non installé : pip install PyQtWebEngine")
+            _why = self._web_disabled_reason or "PyQtWebEngine non installé : pip install PyQtWebEngine"
+            self.btn_real_map.setToolTip(_why)
+            self.btn_live_map.setToolTip(_why)
+            if self._web_disabled_reason:
+                QTimer.singleShot(700, lambda: QMessageBox.information(self, "Carte web désactivée", self._web_disabled_reason))
 
         right = QWidget(); rlay = QVBoxLayout(right); rlay.setContentsMargins(0, 0, 0, 0)
 
