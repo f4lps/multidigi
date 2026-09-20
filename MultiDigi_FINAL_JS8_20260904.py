@@ -11026,6 +11026,7 @@ class CWFitDecoder:
     MIN_RUNS = 7              # évènements complets minimum pour tenter un ajustement
     MAX_COST = 0.55           # coût moyen maximal accepté (0.42 coupait les signaux faibles/QSB)
     MIN_CONTRAST = 3.0        # pic/plancher minimal de l'enveloppe
+    SPLIT_GAP = 1.6           # silence interne mini pour couper un motif invalide en deux lettres
     WORD_ADAPT = True         # seuil de mot = WORD_RATIO x médiane des silences entre lettres (borné)
     WORD_RATIO = 1.55
     WORD_MIN, WORD_MAX = 3.8, 5.4
@@ -11264,6 +11265,21 @@ class CWFitDecoder:
             self._last_good = self._n_env
         return self._read(runs, u, b, base_idx)
 
+    def _resolve(self, cur, gaps):
+        """Motif -> texte. Motif invalide : coupé au plus grand silence interne (deux lettres collées, ex. --.-... = Q S),
+        sinon correction d'un élément ; jamais de « ? » inventé : '\x00' = non résolu (n'est pas affiché)."""
+        v = _FIT_MORSE.get(cur)
+        if v:
+            return v
+        if len(cur) >= 2 and len(gaps) == len(cur) - 1:
+            for g, i in sorted(((g, i) for i, g in enumerate(gaps)), reverse=True):
+                if g < self.SPLIT_GAP:
+                    break
+                a, b = _FIT_MORSE.get(cur[:i + 1]), _FIT_MORSE.get(cur[i + 1:])
+                if a and b:
+                    return a + b
+        return (_FIT_FIX1.get(cur) if self.FIX_ONE else None) or '\x00'
+
     @staticmethod
     def _mark_ok(x):
         return 0.55 <= x <= 1.65 or 2.3 <= x <= 4.6
@@ -11277,6 +11293,7 @@ class CWFitDecoder:
         events = []            # ('c', car, début, fin, propre, isolé) | ('s', début_du_silence)
         cur, cur_start, last_end = '', None, None
         clean, lead = True, None
+        cgaps = []                                # silences entre éléments du caractère en cours
         last = len(runs) - 1
         prev_gap = None
         wgap = self.WORD_GAP
@@ -11295,7 +11312,7 @@ class CWFitDecoder:
                 if idx == last:
                     break                         # marque en cours : pas encore lisible
                 if cur_start is None:
-                    cur_start, clean, lead = a0, True, prev_gap
+                    cur_start, clean, lead, cgaps = a0, True, prev_gap, []
                 xm = x + b
                 clean = clean and self._mark_ok(xm)
                 cur += '.' if xm < 2.0 else '-'
@@ -11307,9 +11324,10 @@ class CWFitDecoder:
                 prev_gap = xs
                 if cur and xs < 2.2:
                     clean = clean and (0.5 <= xs <= 1.7)
+                    cgaps.append(xs)
                 if xs >= 2.2 and cur and (idx < last or xs >= 3.2):
                     isolated = len(cur) == 1 and (lead is None or lead >= wgap) and xs >= wgap
-                    events.append(('c', _FIT_MORSE.get(cur) or (_FIT_FIX1.get(cur) if self.FIX_ONE else None) or '?', cur_start, last_end, clean, isolated))
+                    events.append(('c', self._resolve(cur, cgaps), cur_start, last_end, clean, isolated))
                     cur, cur_start = '', None
                 if xs >= wgap and not cur and last_end is not None:
                     events.append(('s', a0))
@@ -11318,7 +11336,7 @@ class CWFitDecoder:
         for ev in events:
             if ev[0] == 'c':
                 if ev[2] > self._char_wm:
-                    if weak and (not ev[4] or ev[5] or ev[1] == '?'):
+                    if ev[1] == '\x00' or (weak and (not ev[4] or ev[5])) or (ev[1] == '?' and (weak or not ev[4])):
                         self._char_wm = ev[3]         # écarté, mais on avance le repère
                         continue
                     out.append(ev[1])
