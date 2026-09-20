@@ -62,6 +62,15 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   `CWFitDecoder` de MultiDigi.
 - Toujours vrai : la radio de l'utilisateur est peut-être restée en AM (le nouveau code la remettra en CW/USB à la connexion).
 
+### 🧩 Plantage du Tracker chez un OM (Windows 11, AMD x64, installateur) — à suivre
+- Symptôme : le programme se ferme au démarrage du Tracker (carte OSM = QtWebEngine/Chromium). Plantage natif, non
+  interceptable en Python ; cause probable = pilote GPU de son PC. Le paquet est bon (QtWebEngineProcess.exe, icudtl.dat et
+  les .pak sont dans `dist/MultiDigi/_internal/PyQt5/Qt5`).
+- Fait (commit 41db5d8) : `_f4lps_crash_guard()` dans `main()` : Chromium sans GPU (`--disable-gpu --disable-gpu-compositing`,
+  désactivable par `MULTIDIGI_MAP_GPU=1`) + `faulthandler` vers `~/multidigi_crash.log`.
+- Décision de l'utilisateur : PAS de version spéciale pour cet OM ; le correctif partira avec la prochaine version.
+  S'il replante après : lui demander `multidigi_crash.log`, sa carte graphique et la date du pilote (mise à jour du pilote AMD).
+
 ### ⚠️ POINTS OUVERTS après le test en direct (fin de session du 20 septembre 2026) — À TRAITER EN PREMIER
 
 **A. La bascule automatique CW/USB ne marche pas sur le vrai poste.**
