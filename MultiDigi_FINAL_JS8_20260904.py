@@ -11026,6 +11026,9 @@ class CWFitDecoder:
     MIN_RUNS = 7              # évènements complets minimum pour tenter un ajustement
     MAX_COST = 0.55           # coût moyen maximal accepté (0.42 coupait les signaux faibles/QSB)
     MIN_CONTRAST = 3.0        # pic/plancher minimal de l'enveloppe
+    WORD_ADAPT = True         # seuil de mot = WORD_RATIO x médiane des silences entre lettres (borné)
+    WORD_RATIO = 1.55
+    WORD_MIN, WORD_MAX = 3.8, 5.4
     WORD_GAP = 4.8            # silence (en unités de dit) à partir duquel on écrit un espace entre deux mots
     FIX_ONE = True            # motif invalide -> seul caractère valide à un élément près (ex. ...... -> 5)
     HYST_W = 0.28             # écart entre seuil d'attaque et de relâchement (fraction de l'excursion)
@@ -11276,6 +11279,13 @@ class CWFitDecoder:
         clean, lead = True, None
         last = len(runs) - 1
         prev_gap = None
+        wgap = self.WORD_GAP
+        if self.WORD_ADAPT:                       # s'adapte à l'espacement de l'opérateur (serré ou large)
+            lg = [ln / rate / u - b for st, s0, ln in runs[1:-1] if st == 0]
+            lg = [g for g in lg if 2.2 <= g < 4.4]
+            if len(lg) >= 6:
+                wgap = float(np.clip(self.WORD_RATIO * float(np.median(lg)), self.WORD_MIN, self.WORD_MAX))
+        self.word_gap_used = wgap
         for idx, (st, s, ln) in enumerate(runs):
             x = ln / rate / u
             a0 = base_idx + s
@@ -11298,10 +11308,10 @@ class CWFitDecoder:
                 if cur and xs < 2.2:
                     clean = clean and (0.5 <= xs <= 1.7)
                 if xs >= 2.2 and cur and (idx < last or xs >= 3.2):
-                    isolated = len(cur) == 1 and (lead is None or lead >= self.WORD_GAP) and xs >= self.WORD_GAP
+                    isolated = len(cur) == 1 and (lead is None or lead >= wgap) and xs >= wgap
                     events.append(('c', _FIT_MORSE.get(cur) or (_FIT_FIX1.get(cur) if self.FIX_ONE else None) or '?', cur_start, last_end, clean, isolated))
                     cur, cur_start = '', None
-                if xs >= self.WORD_GAP and not cur and last_end is not None:
+                if xs >= wgap and not cur and last_end is not None:
                     events.append(('s', a0))
         out = []
         weak = self.cost > self.GOOD_COST
