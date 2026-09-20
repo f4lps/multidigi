@@ -37,6 +37,10 @@ FSK/PSK réels).
   faibles, QSB (fading) et manipulation à la main, silencieux sur du bruit
 - **CW envoyé par le manipulateur de la radio** (Icom, CI-V 0x17) comme CW Terminal, et **mode radio automatique** :
   famille CW → radio en CW, toutes les autres familles → radio en USB
+- **Décodage CW plus lisible** : séparation des mots adaptée à l'espacement de l'opérateur, lettres collées
+  séparées, plus de « ? » parasites
+- **Tracker** : la carte s'affiche sans accélération GPU (évite les fermetures brutales selon le pilote graphique) ;
+  journal de plantage dans `multidigi_crash.log`
 - Connexion CAT plus claire : quand un port COM est déjà utilisé, MultiDigi **nomme le logiciel
   fautif** (ex. « COM13 déjà utilisé par CW_Terminal.exe (PID 1234) »), et affiche en **orange**
   (au lieu du ✅ vert) un port ouvert dont la radio ne répond pas
