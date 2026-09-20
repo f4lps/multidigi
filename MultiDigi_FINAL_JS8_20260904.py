@@ -45247,9 +45247,36 @@ _disable_js8_research_diagnostic_io()
 # ============================================================================
 # POINT D'ENTRÉE
 # ============================================================================
+def _f4lps_crash_guard():
+    """V8.5 F4LPS — plantage du Tracker chez un OM (Windows 11, AMD) : la carte utilise Chromium (QtWebEngine), dont le
+    processus graphique plante selon le pilote GPU et ferme tout le programme sans message. Deux parades :
+    1) rendu de la carte en LOGICIEL (sans GPU) : la carte est légère, aucune différence visible ;
+       pour réactiver le GPU : variable d'environnement MULTIDIGI_MAP_GPU=1 ;
+    2) journal de plantage natif ~/multidigi_crash.log (à envoyer au développeur si ça recommence)."""
+    try:
+        if os.name == 'nt' and os.environ.get('MULTIDIGI_MAP_GPU', '') != '1':
+            flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
+            for f in ('--disable-gpu', '--disable-gpu-compositing'):
+                if f not in flags:
+                    flags = (flags + ' ' + f).strip()
+            os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = flags
+    except Exception:
+        pass
+    try:
+        import faulthandler
+        global _F4LPS_CRASH_LOG
+        _F4LPS_CRASH_LOG = open(os.path.join(os.path.expanduser('~'), 'multidigi_crash.log'), 'a', buffering=1)
+        _F4LPS_CRASH_LOG.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} MultiDigi {PROGRAM_VERSION_TAG} "
+                               f"Python {sys.version.split()[0]} ---\n")
+        faulthandler.enable(_F4LPS_CRASH_LOG, all_threads=True)
+    except Exception:
+        pass
+
+
 def main():
     # MULTIDIGI V0.1 F4LPS : requis par QWebEngineView (carte réelle du Grid
     # Tracker intégré) -- doit être défini AVANT la création de QApplication.
+    _f4lps_crash_guard()
     try:
         QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     except Exception:
