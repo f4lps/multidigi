@@ -29,14 +29,26 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
    mais radio muette ≠ connexion réussie (deux panneaux : `_toggle_cat` des Réglages PSK et celui de la fenêtre).
 4. **Auto-détection du port** : signale les ports occupés et par quel programme.
 5. README, `CAT_SETUP.md` (section « Port COM occupé, ou radio qui ne répond pas ») mis à jour.
-6. **CW audio + radio en mode CW = PTT sans morse** (signalé par l'utilisateur en test, avec HRD/Win4Icom) : le CW de
-   MultiDigi est une **note sinusoïdale** (`_CWEncoderAdapter`) jouée sur la carte son ; une radio en mode CW ignore
-   l'audio (elle passe en TX sans rien émettre). Diagnostic confirmé en direct (`get mode` via HRD → `CW`). Cause
-   probable : le clic sur un spot CW du tracker appelle `rc.set_mode_cw()` (vers la ligne « CW uniquement -> CW »).
-   Ajouts : `RadioController.get_mode_name()` (HRD, OmniRig, FLRig, Icom CI-V 0x04 ; lecture seule) et
-   `PSKMainWindow._cw_radio_mode_ok()` appelée dans `_start_tx` pour la famille CW : si la radio est en CW, boîte
-   « Passer en USB et émettre / Émettre quand même / Annuler ». Test : `CW_Terminal_Dev/test_md_cwmode.py`.
-   ⚠️ En USB, la fréquence émise = affichage + hauteur de la note (ex. +700 Hz) : c'est inhérent au CW en audio.
+6. **CW « natif » + mode radio automatique** (demande de l'utilisateur après un test en direct : PTT sans morse
+   parce que la radio était en mode CW alors que MultiDigi envoyait une note **audio**, ce qu'une radio en CW ignore).
+   Décision : MultiDigi envoie maintenant le CW **comme CW Terminal** — texte confié au manipulateur de la radio par
+   CI-V `0x17` (messages de 30 caractères au plus, découpés par mots, attente de la durée réelle du morse entre deux
+   messages, `0x14 0x0C` pour la vitesse, `0x17 0xFF` pour l'arrêt, **aucun PTT** : la radio passe en TX toute seule
+   en BK-IN). Et **le mode radio suit la famille** : CW → `set_mode_cw()`, toutes les autres → `set_mode_usb()`.
+   - `RadioController` : `cw_link()`, `cw_open_aux()` (port CAT auxiliaire pour HRD/FLRig/OmniRig ; DTR/RTS coupés
+     AVANT l'ouverture ; vérifie que la radio répond), `cw_close_aux()`, `cw_clean_text()`, `cw_send_speed()`,
+     `cw_send_text()`, `cw_stop()`, `get_mode_name()` (HRD, OmniRig, FLRig, CI-V 0x04 ; lecture seule).
+   - `CWNativeTxThread` (juste avant `PSKTxThread`, **mêmes signaux**, donc toute la fin d'émission existante est
+     réutilisée) ; `PSKMainWindow._cw_native_prepare()`, `_apply_radio_mode_for_family()`, `_start_tx_cw_native()` ;
+     `_launch_tx` court-circuite le PTT et l'audio en CW natif ; déclencheurs : `_on_family_changed` (+300 ms) et
+     `_restart_freq_poll` (+700 ms, appelé à chaque connexion CAT).
+   - Liaison CI-V pour le CW en HRD : le port du panneau RADIO CAT (`_cat_settings`: port/baud/civ), ici COM13.
+   - **Repli audio** (radio non-Icom, aucune liaison CI-V possible) : la radio est mise en USB et l'ancienne boîte
+     `_cw_radio_mode_ok()` (« Passer en USB et émettre ») reste en garde-fou.
+   - ⚠️ Non fait : CW natif Yaesu (KY) ; pas de test sur radio réelle (à faire : BK-IN requis, vérifier que `0x17`
+     enchaîne bien les messages de 30 caractères sans trou audible).
+   - Tests (sans radio, `CW_Terminal_Dev/`) : `test_md_native.py` (fausse radio COM16/COM17 + faux HRD qui mémorise
+     le mode, **dossier utilisateur temporaire : ne touche jamais aux réglages réels**), `test_md_cwmode.py`.
 
 ### Mesures (pour ne pas les refaire)
 - Banc synthétique (mêmes signaux que CW Terminal, 2 essais/scénario), erreur moyenne par caractère :

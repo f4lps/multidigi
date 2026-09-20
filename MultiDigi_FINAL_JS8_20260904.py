@@ -25067,6 +25067,111 @@ class F4LPSRsidPassiveThread(QThread):
 # ============================================================================
 # THREAD TX PSK
 # ============================================================================
+class CWNativeTxThread(QThread):
+    """V8.5 F4LPS — émission CW « native » : envoie le texte au manipulateur de la radio (CI-V 0x17), par messages
+    de 30 caractères au plus, en attendant la durée réelle du morse entre deux messages. Mêmes signaux que
+    PSKTxThread pour réutiliser toute la gestion de fin d'émission de la fenêtre principale."""
+    tx_started = pyqtSignal()
+    tx_finished = pyqtSignal()
+    tx_progress = pyqtSignal(int)
+    tx_char_progress = pyqtSignal(int, int)
+    tx_audio = pyqtSignal(object)
+    tx_level = pyqtSignal(float, bool)
+
+    def __init__(self, radio_ctrl, text, wpm=20):
+        super().__init__()
+        self.rc = radio_ctrl
+        self.text = str(text or '')
+        self.wpm = max(6.0, min(60.0, float(wpm)))
+        self._abort = False
+
+    def abort(self):
+        self._abort = True
+        try:
+            self.rc.cw_stop()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _units(txt):
+        """Durée du texte en unités de dit (dit=1, trait=3, entre éléments 1, entre lettres 3, entre mots 7)."""
+        u = 0
+        words = txt.split(' ')
+        for wi, w in enumerate(words):
+            for ci, ch in enumerate(w):
+                code = _CWEncoderAdapter._MORSE.get(ch, '')
+                for k, sym in enumerate(code):
+                    u += 1 if sym == '.' else 3
+                    if k < len(code) - 1:
+                        u += 1
+                if ci < len(w) - 1:
+                    u += 3
+            if wi < len(words) - 1:
+                u += 7
+        return u
+
+    @staticmethod
+    def _chunks(txt, limit=30):
+        out, cur = [], ''
+        for w in txt.split(' '):
+            if not w:
+                continue
+            while len(w) > limit:                       # mot très long : coupé
+                if cur:
+                    out.append(cur)
+                    cur = ''
+                out.append(w[:limit])
+                w = w[limit:]
+            if not cur:
+                cur = w
+            elif len(cur) + 1 + len(w) <= limit:
+                cur += ' ' + w
+            else:
+                out.append(cur)
+                cur = w
+        if cur:
+            out.append(cur)
+        return out
+
+    def run(self):
+        rc = self.rc
+        txt = RadioController.cw_clean_text(self.text)
+        chunks = self._chunks(txt)
+        dot = 1.2 / self.wpm
+        total_units = float(sum(self._units(c) + 4 for c in chunks)) or 1.0
+        n_chars = max(1, len(self.text))
+        done_units = 0.0
+        rc._tx_active = True                              # suspend le sondage de fréquence pendant l'émission
+        try:
+            self.tx_started.emit()
+            rc.cw_send_speed(self.wpm)
+            for c in chunks:
+                if self._abort:
+                    break
+                if not rc.cw_send_text(c):
+                    break
+                dur = (self._units(c) * 1.08 + 4) * dot     # +4 unités : espace entre deux messages
+                t_end = time.perf_counter() + dur
+                t0 = time.perf_counter()
+                while True:
+                    now = time.perf_counter()
+                    if self._abort or now >= t_end:
+                        break
+                    frac = (done_units + (now - t0) / dot) / total_units
+                    self.tx_progress.emit(int(min(99, 100 * frac)))
+                    sent = int(n_chars * min(1.0, frac))
+                    self.tx_char_progress.emit(sent, min(n_chars, sent + 1))
+                    time.sleep(0.05)
+                done_units += self._units(c) + 4
+            if self._abort:
+                rc.cw_stop()
+        finally:
+            rc._tx_active = False
+            self.tx_progress.emit(100)
+            self.tx_char_progress.emit(n_chars, n_chars)
+            self.tx_finished.emit()
+
+
 class PSKTxThread(QThread):
     tx_started  = pyqtSignal()
     tx_finished = pyqtSignal()
@@ -27191,6 +27296,129 @@ class RadioController:
             # même si l'écriture série a levé une exception.
             self._tx_active = False
 
+    # ── CW « natif » Icom (CI-V 0x17), comme CW Terminal ────────────────────────────────────────
+    # La radio fabrique elle-même le morse (manipulateur interne) : elle doit être en mode CW avec BK-IN.
+    # Liaison CI-V : la connexion série directe, ou (avec HRD/FLRig/OmniRig) un port CAT auxiliaire.
+    _CW_SAFE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,?/=+-:'()@")
+
+    def cw_link(self):
+        """(port_série, adresse_CI-V) utilisable pour le CW natif, ou None."""
+        sp = getattr(self, 'serial_port', None)
+        if (self.connection_type == 'serial' and self.protocol == 'icom' and sp is not None
+                and getattr(sp, 'is_open', False)):
+            return sp, int(self.civ_address)
+        aux = getattr(self, '_cw_aux', None)
+        if aux and getattr(aux['sp'], 'is_open', False):
+            return aux['sp'], int(aux['civ'])
+        return None
+
+    def cw_open_aux(self, port, baud, civ_addr):
+        """Ouvre un port CAT auxiliaire pour le CW natif quand la connexion principale est HRD/FLRig/OmniRig.
+        Vérifie que la radio répond (simple lecture de fréquence, aucune émission). Retourne (ok, message)."""
+        if not SERIAL_AVAILABLE:
+            return False, "pyserial non disponible"
+        self.cw_close_aux()
+        try:
+            sp = serial.Serial()                       # DTR/RTS coupés AVANT l'ouverture (sécurité, cf. 8.4.7)
+            sp.port = port
+            sp.baudrate = int(baud)
+            sp.bytesize, sp.parity, sp.stopbits = 8, 'N', 1
+            sp.timeout, sp.write_timeout = 1, 1
+            sp.dtr = False
+            sp.rts = False
+            sp.open()
+        except Exception as e:
+            return False, (_f4lps_port_busy_message(port, e) or str(e))
+        time.sleep(0.05)
+        addrs = [int(civ_addr)] if civ_addr else [0x94, 0x98, 0x88, 0x70, 0xA2, 0x6E, 0x76, 0x7C, 0x90]
+        found = None
+        for a in addrs:
+            try:
+                sp.reset_input_buffer()
+                sp.write(bytes([0xFE, 0xFE, a, 0xE0, 0x03, 0xFD]))
+                sp.flush()
+                end = time.time() + 0.45
+                r = b''
+                while time.time() < end and len(r) < 64:
+                    n = getattr(sp, 'in_waiting', 0)
+                    if n:
+                        r += sp.read(min(n, 64 - len(r)))
+                    else:
+                        time.sleep(0.02)
+            except Exception:
+                r = b''
+            if any(r[i] == 0xFE and r[i + 1] == 0xFE and r[i + 2] == 0xE0 and r[i + 3] == a and r[i + 4] == 0x03
+                   for i in range(len(r) - 5)):
+                found = a
+                break
+        if found is None:
+            try:
+                sp.close()
+            except Exception:
+                pass
+            return False, f"la radio ne répond pas en CI-V sur {port} (adresse et port CAT à vérifier)"
+        self._cw_aux = {'sp': sp, 'civ': found, 'port': port}
+        return True, f"CW par le manipulateur de la radio : CI-V sur {port} (0x{found:02X})"
+
+    def cw_close_aux(self):
+        aux = getattr(self, '_cw_aux', None)
+        self._cw_aux = None
+        if aux:
+            try:
+                aux['sp'].close()
+            except Exception:
+                pass
+
+    @classmethod
+    def cw_clean_text(cls, text):
+        """Texte en majuscules limité aux caractères que le manipulateur Icom sait envoyer."""
+        t = str(text or '').upper().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        return ' '.join(''.join(c for c in t if c in cls._CW_SAFE).split())
+
+    def cw_send_speed(self, wpm):
+        """Vitesse du manipulateur de la radio (CI-V 0x14 0x0C), 6 à 60 WPM."""
+        link = self.cw_link()
+        if not link:
+            return False
+        sp, civ = link
+        w = max(6, min(60, int(round(float(wpm)))))
+        val = int((w - 6) / 54.0 * 255)
+        b0 = (val // 100) & 0x0F
+        b1 = (((val // 10) % 10) << 4) | (val % 10)
+        with self._lock:
+            sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x14, 0x0C, b0, b1, 0xFD]))
+        return True
+
+    def cw_send_text(self, text):
+        """Un message CW (CI-V 0x17), 30 caractères au plus. Retourne True si envoyé."""
+        link = self.cw_link()
+        if not link:
+            return False
+        txt = self.cw_clean_text(text)[:30]
+        if not txt:
+            return False
+        sp, civ = link
+        with self._lock:
+            try:
+                sp.reset_input_buffer()
+            except Exception:
+                pass
+            sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x17]) + txt.encode('ascii') + bytes([0xFD]))
+        return True
+
+    def cw_stop(self):
+        """Arrête le message CW en cours (CI-V 0x17 0xFF)."""
+        link = self.cw_link()
+        if not link:
+            return False
+        sp, civ = link
+        try:
+            with self._lock:
+                sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x17, 0xFF, 0xFD]))
+            return True
+        except Exception:
+            return False
+
     def get_mode_name(self):
         """V8.5 F4LPS — mode actuel de la radio en texte majuscule ('CW', 'USB', 'DATA-U'…), '' si inconnu.
         Lecture seule (aucune émission). HRD : « get mode » ; OmniRig : bits de mode ; FLRig : rig.get_mode ;
@@ -27280,6 +27508,10 @@ class RadioController:
         return False
 
     def disconnect(self):
+        try:
+            self.cw_close_aux()
+        except Exception:
+            pass
         if self.connection_type == 'omnirig':
             self.omnirig=None; self.rig=None
         try: self._hrd_client=None
@@ -36444,6 +36676,74 @@ class PSKMainWindow(QMainWindow):
             pass
         self._start_tx(test_text)
 
+    def _cw_native_prepare(self):
+        """CW natif possible ? Ouvre au besoin un port CI-V auxiliaire (HRD/FLRig/OmniRig), vérifie que la radio répond
+        et la met en mode CW. Retourne True si l'envoi natif est prêt, False (repli audio) sinon."""
+        rc = getattr(self, 'radio_ctrl', None)
+        if rc is None or not getattr(rc, 'connected', False):
+            return False
+        if not rc.cw_link():
+            cs = dict(getattr(self, '_cat_settings', {}) or {})
+            if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom' \
+                    or not cs.get('port'):
+                return False
+            m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
+            civ = int(m.group(1), 16) if m else 0x94
+            try:
+                baud = int(cs.get('baud', 19200))
+            except Exception:
+                baud = 19200
+            ok, msg = rc.cw_open_aux(str(cs['port']), baud, civ)
+            self._set_status(("🔗 " if ok else "⚠️ CW natif indisponible : ") + msg)
+            if not ok:
+                return False
+        try:
+            mode = str(rc.get_mode_name() or '').upper()
+        except Exception:
+            mode = ''
+        if not mode.startswith('CW'):
+            try:
+                rc.set_mode_cw()
+                time.sleep(0.35)                              # laisse la radio appliquer le mode
+                self._set_status("🟠 Radio passée en mode CW (le morse est fabriqué par la radio)")
+            except Exception:
+                pass
+        return True
+
+    def _apply_radio_mode_for_family(self, fam=None):
+        """Famille CW -> radio en mode CW (envoi natif) ; toutes les autres familles -> USB.
+        Sans radio connectée : ne fait rien. Ce ne sont que des changements de mode, jamais d'émission."""
+        try:
+            rc = getattr(self, 'radio_ctrl', None)
+            if rc is None or not getattr(rc, 'connected', False):
+                return
+            fam = fam or getattr(self, '_family', '')
+            if getattr(self, '_tx_active', False):
+                return
+            if fam == 'CW':
+                if not self._cw_native_prepare():
+                    rc.set_mode_usb()
+                    self._set_status("🔵 CW audio (pas de liaison CI-V) : radio passée en USB")
+            else:
+                mode = str(rc.get_mode_name() or '').upper()
+                if not mode.startswith(('USB', 'DATA', 'DIG')):
+                    rc.set_mode_usb()
+                    self._set_status(f"🔵 Radio passée en USB pour {fam}")
+        except Exception as e:
+            print(f"⚠️ mode radio automatique : {type(e).__name__}: {e}")
+
+    def _start_tx_cw_native(self):
+        """Lance l'émission CW par le manipulateur de la radio (à la place du thread audio)."""
+        wpm = float(getattr(self.encoder_obj, 'wpm', 20.0) or 20.0)
+        self.tx_thread = CWNativeTxThread(self.radio_ctrl, self._pending_tx_text, wpm)
+        self.tx_thread.tx_started.connect(self._on_tx_started)
+        self.tx_thread.tx_started.connect(lambda: self._set_status(
+            f"📡 CW envoyé par le manipulateur de la radio ({wpm:.0f} WPM) — BK-IN requis"))
+        self.tx_thread.tx_finished.connect(self._on_tx_finished)
+        self.tx_thread.tx_progress.connect(self.tx_progress.setValue)
+        self.tx_thread.tx_char_progress.connect(self._on_tx_char_progress)
+        self.tx_thread.start()
+
     def _cw_radio_mode_ok(self):
         """True si on peut émettre le CW audio. Si la radio est en mode CW, propose de passer en USB ;
         retourne False (émission annulée) si l'utilisateur annule. Sans CAT ou mode inconnu : True."""
@@ -36532,8 +36832,12 @@ class PSKMainWindow(QMainWindow):
             QMessageBox.warning(self,"TX","Texte vide."); return
         # V8.5 F4LPS : le CW de MultiDigi part en AUDIO (note sinusoïdale). Une radio en mode CW l'ignore : elle
         # passe en émission (PTT) mais n'envoie AUCUN morse. On le détecte avant d'émettre.
-        if getattr(self, '_family', '') == 'CW' and not self._cw_radio_mode_ok():
-            return
+        self._cw_native_pending = False
+        if getattr(self, '_family', '') == 'CW':
+            if self._cw_native_prepare():
+                self._cw_native_pending = True          # CW par le manipulateur de la radio, sans audio
+            elif not self._cw_radio_mode_ok():          # repli audio : la radio ne doit pas être en CW
+                return
         tx_sr = self.audio_thread.sample_rate if self.audio_thread else 48000
         self.encoder_obj.sample_rate = tx_sr
         self.encoder_obj.set_mode(self.mode_combo.currentText())
@@ -36616,6 +36920,13 @@ class PSKMainWindow(QMainWindow):
             self._rx_was_active = False; self._launch_tx()
 
     def _launch_tx(self):
+        if getattr(self, "_family", "") == "CW" and getattr(self, "_cw_native_pending", False):
+            # CW natif : pas de PTT (la radio passe en émission toute seule, BK-IN) ni d'audio.
+            self._cw_native_pending = False
+            self._tx_launch_time = time.time()
+            self._tx_min_hold_until = self._tx_launch_time
+            QTimer.singleShot(0, self._start_tx_cw_native)
+            return
         if getattr(self, "_family", "") == "JS8":
             if not bool(getattr(self, "_pending_tx_preflight_ok", False)):
                 self._set_status("⛔ TX JS8 bloque : prevalidation absente")
@@ -37875,6 +38186,7 @@ class PSKMainWindow(QMainWindow):
                 self._toggle_js8_auto_detect(self.btn_auto_js8.isChecked())
         except Exception:
             pass
+        QTimer.singleShot(300, lambda f=fam: self._apply_radio_mode_for_family(f))   # CW -> radio en CW ; autres -> USB
         if was_rx:
             self._set_status(f"✅ Famille changée : {fam} — mode {default_mode} — redémarrage RX...")
             QTimer.singleShot(200, self._start_rx)
@@ -39426,6 +39738,7 @@ class PSKMainWindow(QMainWindow):
         old = getattr(self,'_freq_poll_thread',None)
         if old: old.stop(); old.wait(500)
         if not self.radio_ctrl.connected: return
+        QTimer.singleShot(700, self._apply_radio_mode_for_family)     # radio (re)connectée : mode selon la famille
         self._freq_poll_thread = _FreqPollThread(self.radio_ctrl,3000)
         self._freq_poll_thread.freq_ready.connect(self._on_freq)
         self._freq_poll_thread.start()

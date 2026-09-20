@@ -35,6 +35,8 @@ FSK/PSK réels).
 - Vérificateur de mise à jour intégré (onglet À propos)
 - **CW FIT** : décodeur CW par ajustement du modèle de timing Morse — bien meilleur sur signaux
   faibles, QSB (fading) et manipulation à la main, silencieux sur du bruit
+- **CW envoyé par le manipulateur de la radio** (Icom, CI-V 0x17) comme CW Terminal, et **mode radio automatique** :
+  famille CW → radio en CW, toutes les autres familles → radio en USB
 - Connexion CAT plus claire : quand un port COM est déjà utilisé, MultiDigi **nomme le logiciel
   fautif** (ex. « COM13 déjà utilisé par CW_Terminal.exe (PID 1234) »), et affiche en **orange**
   (au lieu du ✅ vert) un port ouvert dont la radio ne répond pas

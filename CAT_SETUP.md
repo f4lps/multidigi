@@ -166,12 +166,30 @@ CW Terminal, une autre copie de MultiDigi…).
   il en tient une extrémité, tu te branches sur l'autre), le baudrate, l'adresse CI-V et que la radio est allumée.
 - Le bouton **🔍 Auto-détecter le port** signale maintenant aussi les ports occupés et par quel programme.
 
-## CW : la radio passe en émission mais aucun morse ne sort
+## CW : envoi par le manipulateur de la radio, et mode radio automatique (8.5.0)
 
-Le CW de MultiDigi est envoyé en **audio** (une note). Une radio en **mode CW** ignore l'audio : elle émet le PTT
-sans morse. Mets la radio en **USB** (ou DATA-U) : bouton **🔵 Mode USB** du panneau CAT, ou directement dans HRD.
-Depuis la 8.5.0, MultiDigi détecte le mode CW avant d'émettre et propose de passer en USB. En USB, la fréquence
-émise est la fréquence affichée **plus** la hauteur de la note audio (par exemple +700 Hz).
+Depuis la 8.5.0, MultiDigi envoie le CW **comme CW Terminal** : le texte est confié au **manipulateur interne de la
+radio** (commande CI-V `0x17`), c'est la radio qui fabrique le morse. Ce n'est plus une note audio.
+
+**Le mode de la radio suit la famille choisie :**
+- famille **CW** → la radio passe **en mode CW** toute seule ;
+- **toutes les autres familles** (PSK, JS8, Olivia, RTTY…) → la radio passe **en USB** toute seule.
+
+Le changement a lieu au changement de famille et à la connexion du CAT. Ce ne sont que des changements de mode,
+jamais des émissions.
+
+**Ce qu'il faut pour le CW natif :**
+- une radio **Icom** avec une liaison CI-V : la connexion série directe, **ou** (avec HRD, FLRig ou OmniRig) le **port
+  CAT enregistré dans le panneau RADIO CAT** (par exemple COM13 avec Win4Icom), que MultiDigi ouvre en plus pour le
+  CW et dont il vérifie qu'il répond ;
+- la radio en **BK-IN** (semi ou full) : c'est elle qui passe en émission, MultiDigi ne commande pas le PTT ;
+- un texte de 30 caractères au plus par message : MultiDigi le découpe tout seul par mots.
+
+Le bouton **ABORT** envoie l'arrêt du message en cours à la radio.
+
+**Repli audio :** pour une radio non-Icom, ou si aucune liaison CI-V n'est possible, MultiDigi envoie le CW en
+audio comme avant, et met la radio en **USB** (en mode CW une radio ignore l'audio : elle passerait en émission
+sans morse). En USB, la fréquence émise est la fréquence affichée plus la hauteur de la note audio.
 
 ## En cas de problème
 
