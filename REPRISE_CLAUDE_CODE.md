@@ -29,6 +29,14 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
    mais radio muette ≠ connexion réussie (deux panneaux : `_toggle_cat` des Réglages PSK et celui de la fenêtre).
 4. **Auto-détection du port** : signale les ports occupés et par quel programme.
 5. README, `CAT_SETUP.md` (section « Port COM occupé, ou radio qui ne répond pas ») mis à jour.
+6. **CW audio + radio en mode CW = PTT sans morse** (signalé par l'utilisateur en test, avec HRD/Win4Icom) : le CW de
+   MultiDigi est une **note sinusoïdale** (`_CWEncoderAdapter`) jouée sur la carte son ; une radio en mode CW ignore
+   l'audio (elle passe en TX sans rien émettre). Diagnostic confirmé en direct (`get mode` via HRD → `CW`). Cause
+   probable : le clic sur un spot CW du tracker appelle `rc.set_mode_cw()` (vers la ligne « CW uniquement -> CW »).
+   Ajouts : `RadioController.get_mode_name()` (HRD, OmniRig, FLRig, Icom CI-V 0x04 ; lecture seule) et
+   `PSKMainWindow._cw_radio_mode_ok()` appelée dans `_start_tx` pour la famille CW : si la radio est en CW, boîte
+   « Passer en USB et émettre / Émettre quand même / Annuler ». Test : `CW_Terminal_Dev/test_md_cwmode.py`.
+   ⚠️ En USB, la fréquence émise = affichage + hauteur de la note (ex. +700 Hz) : c'est inhérent au CW en audio.
 
 ### Mesures (pour ne pas les refaire)
 - Banc synthétique (mêmes signaux que CW Terminal, 2 essais/scénario), erreur moyenne par caractère :

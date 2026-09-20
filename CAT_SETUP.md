@@ -166,6 +166,13 @@ CW Terminal, une autre copie de MultiDigi…).
   il en tient une extrémité, tu te branches sur l'autre), le baudrate, l'adresse CI-V et que la radio est allumée.
 - Le bouton **🔍 Auto-détecter le port** signale maintenant aussi les ports occupés et par quel programme.
 
+## CW : la radio passe en émission mais aucun morse ne sort
+
+Le CW de MultiDigi est envoyé en **audio** (une note). Une radio en **mode CW** ignore l'audio : elle émet le PTT
+sans morse. Mets la radio en **USB** (ou DATA-U) : bouton **🔵 Mode USB** du panneau CAT, ou directement dans HRD.
+Depuis la 8.5.0, MultiDigi détecte le mode CW avant d'émettre et propose de passer en USB. En USB, la fréquence
+émise est la fréquence affichée **plus** la hauteur de la note audio (par exemple +700 Hz).
+
 ## En cas de problème
 
 Le bouton **CONNECTER** affiche toujours un message de diagnostic précis

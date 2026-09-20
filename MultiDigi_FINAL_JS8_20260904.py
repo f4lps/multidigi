@@ -27191,6 +27191,36 @@ class RadioController:
             # même si l'écriture série a levé une exception.
             self._tx_active = False
 
+    def get_mode_name(self):
+        """V8.5 F4LPS — mode actuel de la radio en texte majuscule ('CW', 'USB', 'DATA-U'…), '' si inconnu.
+        Lecture seule (aucune émission). HRD : « get mode » ; OmniRig : bits de mode ; FLRig : rig.get_mode ;
+        Icom en série : CI-V 0x04."""
+        if not self.connected:
+            return ''
+        try:
+            if self.connection_type == 'hrd':
+                c = getattr(self, '_hrd_client', None)
+                return str(c._send('get mode') or '').strip().upper() if c else ''
+            if self.connection_type == 'omnirig' and self.rig:
+                m = int(self.rig.Mode)
+                if m & (0x00800000 | 0x01000000):          # PM_CW_U | PM_CW_L
+                    return 'CW'
+                return 'USB' if m & 0x02000000 else ('LSB' if m & 0x04000000 else 'AUTRE')
+            if self.connection_type == 'flrig':
+                return str(self._flrig_call('rig.get_mode') or '').strip().upper()
+            if self.protocol == 'icom' and self.serial_port:
+                with self._lock:
+                    self.serial_port.reset_input_buffer()
+                    self.serial_port.write(bytes([0xFE, 0xFE, self.civ_address, 0xE0, 0x04, 0xFD]))
+                    resp = self._read_with_deadline(32, 0.5)
+                for i in range(len(resp) - 6):
+                    if resp[i] == 0xFE and resp[i + 1] == 0xFE and resp[i + 2] == 0xE0 and resp[i + 4] == 0x04:
+                        return {0x00: 'LSB', 0x01: 'USB', 0x02: 'AM', 0x03: 'CW', 0x04: 'RTTY', 0x05: 'FM',
+                                0x07: 'CW', 0x08: 'RTTY'}.get(resp[i + 5], 'AUTRE')
+        except Exception:
+            pass
+        return ''
+
     def set_mode_usb(self):
         """Passe la radio en USB via la connexion CAT active."""
         if not self.connected:
@@ -36414,6 +36444,38 @@ class PSKMainWindow(QMainWindow):
             pass
         self._start_tx(test_text)
 
+    def _cw_radio_mode_ok(self):
+        """True si on peut émettre le CW audio. Si la radio est en mode CW, propose de passer en USB ;
+        retourne False (émission annulée) si l'utilisateur annule. Sans CAT ou mode inconnu : True."""
+        try:
+            rc = getattr(self, 'radio_ctrl', None)
+            mode = str(rc.get_mode_name() or '').upper() if rc is not None else ''
+        except Exception:
+            return True
+        if not mode.startswith('CW'):
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Radio en mode CW")
+        box.setText("La radio est en mode <b>CW</b>.<br><br>MultiDigi envoie le CW sous forme de <b>note audio</b> : "
+                    "en mode CW la radio ignore l'audio et passerait en émission <b>sans envoyer de morse</b>.<br><br>"
+                    "Passer la radio en <b>USB</b> ? (En USB, la fréquence émise = fréquence affichée + hauteur de la "
+                    "note audio, par exemple +700 Hz.)")
+        b_usb = box.addButton("Passer en USB et émettre", QMessageBox.AcceptRole)
+        b_go = box.addButton("Émettre quand même", QMessageBox.DestructiveRole)
+        box.addButton("Annuler", QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is b_usb:
+            try:
+                ok = bool(self.radio_ctrl.set_mode_usb())
+            except Exception:
+                ok = False
+            time.sleep(0.3)                                  # laisse la radio appliquer le mode avant le PTT
+            self._set_status("🔵 Radio passée en USB pour le CW audio" if ok else "⚠️ Passage en USB non confirmé")
+            return True
+        return clicked is b_go
+
     def _start_tx(self, override_text=None):
         # FIX F4LPS : QPushButton.clicked envoie un booléen False à la fonction.
         # Sans cette protection, un clic sur ÉMETTRE était interprété comme
@@ -36468,6 +36530,10 @@ class PSKMainWindow(QMainWindow):
                 pass
         if (not str(text).strip()) and not str(getattr(self, '_pending_wf_text', '') or '').strip():
             QMessageBox.warning(self,"TX","Texte vide."); return
+        # V8.5 F4LPS : le CW de MultiDigi part en AUDIO (note sinusoïdale). Une radio en mode CW l'ignore : elle
+        # passe en émission (PTT) mais n'envoie AUCUN morse. On le détecte avant d'émettre.
+        if getattr(self, '_family', '') == 'CW' and not self._cw_radio_mode_ok():
+            return
         tx_sr = self.audio_thread.sample_rate if self.audio_thread else 48000
         self.encoder_obj.sample_rate = tx_sr
         self.encoder_obj.set_mode(self.mode_combo.currentText())
