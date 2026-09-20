@@ -50,6 +50,18 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
    - Tests (sans radio, `CW_Terminal_Dev/`) : `test_md_native.py` (fausse radio COM16/COM17 + faux HRD qui mémorise
      le mode, **dossier utilisateur temporaire : ne touche jamais aux réglages réels**), `test_md_cwmode.py`.
 
+### ✅ MISE À JOUR (même jour, plus tard) — points A et B corrigés, À RE-TESTER SUR LE VRAI POSTE
+- **A (bascule de mode)** : `RadioController.civ_read_mode()` / `civ_set_mode()` (CI-V `06 01`/`06 03`, relecture `04`, 3 essais,
+  vrai succès/échec) ; `PSKMainWindow._open_civ_aux()`, `_set_radio_mode(want)` (CI-V d'abord, secours HRD avec
+  `set dropdown {Mode} <NOM> <index>` puis relecture), `_cw_native_prepare` et `_apply_radio_mode_for_family` l'utilisent ;
+  liaison auxiliaire ouverte seulement le temps du changement pour les familles non-CW ; si le mode n'est pas confirmé,
+  message orange dans la barre d'état et CW en audio (repli). `test_md_native.py` : faux HRD qui IGNORE `set mode`, radio de
+  départ en AM → TOUT PASSE. Reste à voir sur la vraie radio (COM13 doit être libre : un seul MultiDigi).
+- **B (mots)** : `WORD_GAP = 4.8` (au lieu de 5.5 en dur), balayage 4.4–5.5 : signal réel 110 → 119 mots, aucun mot collé,
+  CER synthétique 5,0 % → 4,7 %. Appliqué dans `cw_fit_decoder.py` (CW Terminal, non publié : V1.9.2 à décider) et dans
+  `CWFitDecoder` de MultiDigi.
+- Toujours vrai : la radio de l'utilisateur est peut-être restée en AM (le nouveau code la remettra en CW/USB à la connexion).
+
 ### ⚠️ POINTS OUVERTS après le test en direct (fin de session du 20 septembre 2026) — À TRAITER EN PREMIER
 
 **A. La bascule automatique CW/USB ne marche pas sur le vrai poste.**

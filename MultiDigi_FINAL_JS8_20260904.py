@@ -11026,6 +11026,7 @@ class CWFitDecoder:
     MIN_RUNS = 7              # évènements complets minimum pour tenter un ajustement
     MAX_COST = 0.55           # coût moyen maximal accepté (0.42 coupait les signaux faibles/QSB)
     MIN_CONTRAST = 3.0        # pic/plancher minimal de l'enveloppe
+    WORD_GAP = 4.8            # silence (en unités de dit) à partir duquel on écrit un espace entre deux mots
     FIX_ONE = True            # motif invalide -> seul caractère valide à un élément près (ex. ...... -> 5)
     HYST_W = 0.28             # écart entre seuil d'attaque et de relâchement (fraction de l'excursion)
     HYST_MIN = 0.08           # le seuil de relâchement ne descend pas sous ce niveau
@@ -11297,10 +11298,10 @@ class CWFitDecoder:
                 if cur and xs < 2.2:
                     clean = clean and (0.5 <= xs <= 1.7)
                 if xs >= 2.2 and cur and (idx < last or xs >= 3.2):
-                    isolated = len(cur) == 1 and (lead is None or lead >= 5.5) and xs >= 5.5
+                    isolated = len(cur) == 1 and (lead is None or lead >= self.WORD_GAP) and xs >= self.WORD_GAP
                     events.append(('c', _FIT_MORSE.get(cur) or (_FIT_FIX1.get(cur) if self.FIX_ONE else None) or '?', cur_start, last_end, clean, isolated))
                     cur, cur_start = '', None
-                if xs >= 5.5 and not cur and last_end is not None:
+                if xs >= self.WORD_GAP and not cur and last_end is not None:
                     events.append(('s', a0))
         out = []
         weak = self.cost > self.GOOD_COST
@@ -27419,6 +27420,55 @@ class RadioController:
         except Exception:
             return False
 
+    _CIV_MODES = {0x00: 'LSB', 0x01: 'USB', 0x02: 'AM', 0x03: 'CW', 0x04: 'RTTY', 0x05: 'FM',
+                  0x07: 'CW', 0x08: 'RTTY'}
+
+    @staticmethod
+    def civ_read_mode(sp, civ, wait=0.6):
+        """Lit le mode par CI-V 0x04 sur le port `sp`. Retourne 'USB', 'CW'… ou '' si pas de réponse."""
+        try:
+            sp.reset_input_buffer()
+            sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x04, 0xFD]))
+            sp.flush()
+            end = time.time() + wait
+            r = b''
+            while time.time() < end and len(r) < 64:
+                n = getattr(sp, 'in_waiting', 0)
+                if n:
+                    r += sp.read(min(n, 64 - len(r)))
+                    for i in range(len(r) - 5):
+                        if r[i] == 0xFE and r[i + 1] == 0xFE and r[i + 2] == 0xE0 and r[i + 3] == civ and r[i + 4] == 0x04:
+                            return RadioController._CIV_MODES.get(r[i + 5], 'AUTRE')
+                else:
+                    time.sleep(0.02)
+        except Exception:
+            pass
+        return ''
+
+    def civ_set_mode(self, want, sp=None, civ=None):
+        """Change le mode par CI-V (06 01 = USB, 06 03 = CW) puis RELIT le mode pour vérifier.
+        Retourne True seulement si la radio confirme. `sp`/`civ` : port et adresse ; par défaut la liaison CW."""
+        if sp is None:
+            link = self.cw_link()
+            if not link:
+                return False
+            sp, civ = link
+        code = {'USB': 0x01, 'CW': 0x03}[want]
+        for _ in range(3):
+            try:
+                with self._lock:
+                    sp.reset_input_buffer()
+                    sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x06, code, 0xFD]))
+                    sp.flush()
+                    time.sleep(0.25)
+                    got = self.civ_read_mode(sp, civ)
+            except Exception:
+                return False
+            if got == want:
+                return True
+            time.sleep(0.2)
+        return False
+
     def get_mode_name(self):
         """V8.5 F4LPS — mode actuel de la radio en texte majuscule ('CW', 'USB', 'DATA-U'…), '' si inconnu.
         Lecture seule (aucune émission). HRD : « get mode » ; OmniRig : bits de mode ; FLRig : rig.get_mode ;
@@ -36676,38 +36726,71 @@ class PSKMainWindow(QMainWindow):
             pass
         self._start_tx(test_text)
 
+    def _open_civ_aux(self):
+        """Ouvre (si besoin) la liaison CI-V auxiliaire d'après le panneau RADIO CAT. Retourne (ok, message)."""
+        rc = self.radio_ctrl
+        if rc.cw_link():
+            return True, ''
+        cs = dict(getattr(self, '_cat_settings', {}) or {})
+        if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom'                 or not cs.get('port'):
+            return False, "pas de liaison CI-V disponible"
+        m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
+        civ = int(m.group(1), 16) if m else 0x94
+        try:
+            baud = int(cs.get('baud', 19200))
+        except Exception:
+            baud = 19200
+        return rc.cw_open_aux(str(cs['port']), baud, civ)
+
+    def _set_radio_mode(self, want):
+        """Met la radio en 'CW' ou 'USB' et VÉRIFIE par relecture. Priorité au CI-V (fiable), sinon CAT du logiciel
+        (HRD, OmniRig, FLRig). Retourne True seulement si la radio a confirmé. Ne fait jamais d'émission."""
+        rc = self.radio_ctrl
+        transient = not rc.cw_link()
+        ok_link, msg = self._open_civ_aux()
+        link = rc.cw_link() if ok_link else None
+        try:
+            if link:
+                sp, civ = link
+                if RadioController.civ_read_mode(sp, civ) == want:
+                    return True
+                if rc.civ_set_mode(want, sp, civ):
+                    return True
+            # secours : commande du logiciel CAT, puis relecture
+            (rc.set_mode_cw if want == 'CW' else rc.set_mode_usb)()
+            if rc.connection_type == 'hrd':
+                try:
+                    c = rc._hrd_client
+                    names = [x.strip() for x in str(c._send('get dropdown-list {Mode}') or '').split(',') if x.strip()]
+                    if want in names:
+                        c.send_simple_command('set dropdown {Mode} %s %d' % (want, names.index(want) + 1))
+                except Exception:
+                    pass
+            end = time.time() + 2.5
+            while time.time() < end:
+                time.sleep(0.4)
+                if str(rc.get_mode_name() or '').upper().startswith(want):
+                    return True
+            return False
+        finally:
+            if transient and want != 'CW' and rc.cw_link() and rc.connection_type != 'serial':
+                rc.cw_close_aux()
+
     def _cw_native_prepare(self):
         """CW natif possible ? Ouvre au besoin un port CI-V auxiliaire (HRD/FLRig/OmniRig), vérifie que la radio répond
-        et la met en mode CW. Retourne True si l'envoi natif est prêt, False (repli audio) sinon."""
+        et la met en mode CW (confirmé). Retourne True si l'envoi natif est prêt, False (repli audio) sinon."""
         rc = getattr(self, 'radio_ctrl', None)
         if rc is None or not getattr(rc, 'connected', False):
             return False
         if not rc.cw_link():
-            cs = dict(getattr(self, '_cat_settings', {}) or {})
-            if rc.connection_type not in ('hrd', 'flrig', 'omnirig') or str(cs.get('protocol', 'icom')) != 'icom' \
-                    or not cs.get('port'):
-                return False
-            m = re.search(r'0x([0-9A-Fa-f]{2})', str(cs.get('civ', '0x94')))
-            civ = int(m.group(1), 16) if m else 0x94
-            try:
-                baud = int(cs.get('baud', 19200))
-            except Exception:
-                baud = 19200
-            ok, msg = rc.cw_open_aux(str(cs['port']), baud, civ)
+            ok, msg = self._open_civ_aux()
             self._set_status(("🔗 " if ok else "⚠️ CW natif indisponible : ") + msg)
             if not ok:
                 return False
-        try:
-            mode = str(rc.get_mode_name() or '').upper()
-        except Exception:
-            mode = ''
-        if not mode.startswith('CW'):
-            try:
-                rc.set_mode_cw()
-                time.sleep(0.35)                              # laisse la radio appliquer le mode
-                self._set_status("🟠 Radio passée en mode CW (le morse est fabriqué par la radio)")
-            except Exception:
-                pass
+        if not self._set_radio_mode('CW'):
+            self._set_status("⚠️ La radio n'a pas confirmé le mode CW : envoi en audio")
+            return False
+        self._set_status("🟠 Radio en mode CW (le morse est fabriqué par la radio)")
         return True
 
     def _apply_radio_mode_for_family(self, fam=None):
@@ -36722,13 +36805,15 @@ class PSKMainWindow(QMainWindow):
                 return
             if fam == 'CW':
                 if not self._cw_native_prepare():
-                    rc.set_mode_usb()
-                    self._set_status("🔵 CW audio (pas de liaison CI-V) : radio passée en USB")
+                    if self._set_radio_mode('USB'):
+                        self._set_status("🔵 CW audio (pas de liaison CI-V) : radio passée en USB")
+                    else:
+                        self._set_status("⚠️ Mode radio non confirmé : vérifie USB / CW sur la radio")
             else:
-                mode = str(rc.get_mode_name() or '').upper()
-                if not mode.startswith(('USB', 'DATA', 'DIG')):
-                    rc.set_mode_usb()
-                    self._set_status(f"🔵 Radio passée en USB pour {fam}")
+                if self._set_radio_mode('USB'):
+                    self._set_status(f"🔵 Radio en USB pour {fam}")
+                else:
+                    self._set_status(f"⚠️ Mode radio non confirmé pour {fam} : vérifie USB sur la radio")
         except Exception as e:
             print(f"⚠️ mode radio automatique : {type(e).__name__}: {e}")
 
