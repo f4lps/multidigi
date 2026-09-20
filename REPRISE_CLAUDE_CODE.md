@@ -62,6 +62,16 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   `CWFitDecoder` de MultiDigi.
 - Toujours vrai : la radio de l'utilisateur est peut-être restée en AM (le nouveau code la remettra en CW/USB à la connexion).
 
+### 📦 MultiDigi 8.5.0 — installateur PRÊT, NON PUBLIÉ (20 septembre 2026)
+- `installer/Output/MultiDigi_Setup_8.5.0.exe` (145 482 835 octets, SHA256 c3f0525c83349992234f170bc49d5eeba40085e8b14f4006aedbc6000844b75d),
+  construit à partir du commit f4e62df (contient : CW FIT, mots adaptatifs, plus de « ? », CW natif, mode radio CI-V vérifié,
+  port occupé nommé, Tracker sans GPU + `multidigi_crash.log`). Build ~10 min (PyInstaller) + Inno Setup.
+- Testé : l'exe démarre (dossier utilisateur temporaire), journal de plantage écrit, fenêtre Tracker + carte OK en rendu logiciel.
+  NON testé : installation propre / mise à jour par-dessus 8.4.7 sur un autre PC, CW natif et bascule de mode avec l'exe installé.
+- Notes de version : `RELEASE_NOTES_8.5.0.md`. Reste (avec accord explicite) : fusion `cw-fit-et-connexions` -> `main`, push,
+  release GitHub `f4lps/multidigi` avec l'installateur (gh CLI absent : passer par l'API avec le jeton de `git credential fill`).
+- CW Terminal 1.9.2 : code commité (f3a39a9) mais installateur NON construit (arrêté sur demande, priorité MultiDigi).
+
 ### 🧩 Plantage du Tracker chez un OM (Windows 11, AMD x64, installateur) — à suivre
 - Symptôme : le programme se ferme au démarrage du Tracker (carte OSM = QtWebEngine/Chromium). Plantage natif, non
   interceptable en Python ; cause probable = pilote GPU de son PC. Le paquet est bon (QtWebEngineProcess.exe, icudtl.dat et
