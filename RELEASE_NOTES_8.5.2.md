@@ -6,7 +6,7 @@ partir par la radio.
 ## Tracker
 - **Disjoncteur** : MultiDigi note qu'il crée la carte web ; si le programme plante à ce moment-là, le lancement suivant
   ouvre le Tracker avec la **grille locale** (sans carte web) et l'explique dans un message, au lieu de replanter.
-  Pour réessayer la carte web : supprimer le fichier `multidigi_map_crash.flag` (dossier utilisateur).
+  Pour réessayer la carte web : supprimer le fichier `multidigi_map_crash.flag` (8.5.2) / `multidigi_map_crash2.flag` (8.5.3) (dossier utilisateur).
 - Toujours : carte sans accélération GPU, journal `multidigi_crash.log`.
 
 ## CW / mode radio

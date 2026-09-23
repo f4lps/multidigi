@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.2"
+PROGRAM_VERSION_TAG = "8.5.3"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -43453,7 +43453,7 @@ class GridTrackerWindow(QMainWindow):
         # encore là au lancement suivant, c'est que ça a planté : on n'ouvre alors que la grille locale.
         self._web_disabled_reason = ''
         _web_ok = bool(HAVE_WEBENGINE)
-        _flag = os.path.join(os.path.expanduser('~'), 'multidigi_map_crash.flag')
+        _flag = os.path.join(os.path.expanduser('~'), 'multidigi_map_crash2.flag')
         if _web_ok:
             try:
                 if os.path.exists(_flag):
@@ -44586,9 +44586,21 @@ class GridTrackerWindow(QMainWindow):
             if col == 0:
                 item.setData(Qt.UserRole, c.get("_id"))
             self.table.setItem(row, col, item)
-        self.table.scrollToBottom()
+        # V8.5.3 F4LPS — le défilement était recalculé après CHAQUE ligne : avec un long journal (quelques milliers de
+        # contacts) l'ouverture du Tracker figeait l'interface pendant des dizaines de secondes (« ne répond pas »).
+        # On le regroupe : un seul défilement, exécuté quand la boucle d'évènements reprend la main.
+        if not getattr(self, '_scroll_pending', False):
+            self._scroll_pending = True
+            QTimer.singleShot(0, self._flush_table_scroll)
         if self.table.rowCount() > 500:
             self.table.removeRow(0)
+
+    def _flush_table_scroll(self):
+        self._scroll_pending = False
+        try:
+            self.table.scrollToBottom()
+        except Exception:
+            pass
 
     def _refresh_awards(self):
         qso_list = [c for c in self.store.contacts if c.get("source") == "qso"]
