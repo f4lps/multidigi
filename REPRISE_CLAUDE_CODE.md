@@ -72,7 +72,7 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   release GitHub `f4lps/multidigi` avec l'installateur (gh CLI absent : passer par l'API avec le jeton de `git credential fill`).
 - CW Terminal 1.9.2 : code commité (f3a39a9) mais installateur NON construit (arrêté sur demande, priorité MultiDigi).
 
-### 📡 JS8 : réponse HB avec SNR + log auto vers les logs cochés (26 septembre 2026) — codé et testé, NON compilé / NON publié
+### 📡 JS8 : réponse HB avec SNR + log auto vers les logs cochés (26 septembre 2026) — dans la 8.5.4 (compilée, NON publiée)
 - **HB -> réponse `SNR <dB>`** (`_js8_maybe_ack_hits`, `_prepare_js8_command(kind, number)`) : d'après la doc JS8Call, les réponses aux
   heartbeats utilisent la commande SNR (cmd 25) et non ACK. Rapport = `hit['snr_db']` arrondi, borné -30..+31 ; repli ACK si
   inconnu. Aller-retour encodage/décodage vérifié (`JS8TXEncoder._pack_message_frames` -> `JS8RXDecoder._decode_js8_payload_v25`).
@@ -80,9 +80,10 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   (QTimer 60 ms) via `QSOLogDialog(...)` NON affiché et `_send_selected_logs(interactive=False)` -> (envoyés, erreurs) ; les cases
   lues sont `_logbook_settings['logsel_*']`. Résultat dans `js8_auto_status` + `multidigi_radio.log` (la barre d'état est écrasée
   par la recherche d'indicatif).
-- ⚠️ Points ouverts : (1) la macro `<add-log>` (73+Log) garde l'ancien comportement (Tracker seul) ; (2) les journaux EN LIGNE (QRZ, eQSL,
-  ClubLog, WaveLog, LoTW) s'exécutent dans le fil de l'interface (timeout jusqu'à 20 s si Internet est coupé) : à passer en fil séparé si
-  gênant ; (3) RST loggué = celui des champs (599) et non le SNR reçu ; (4) le mode envoyé aux journaux est « JS8 » (ADIF MFSK/JS8 pour QRZ).
+- **Résolu dans la 8.5.4** : (1) macro `<add-log>` envoyée (`_send_macro`) -> Tracker + journaux cochés ; (2) envois DANS UN FIL
+  (`_LogSendWorker` + `_headless_log_snapshot` : copie sans widgets de `QSOLogDialog`, mêmes méthodes `_send_*` ; le fil ne touche
+  JAMAIS un widget, les réglages modifiés sont refusionnés et sauvegardés par la fenêtre) ; (3) RST loggué = SNR reçu / SNR envoyé
+  (`_js8_snr_sent`) ; (4) mode envoyé « JS8 » (ADIF MFSK/JS8 pour QRZ) ; bug WaveLog corrigé (`now` non défini).
 - Test : `CW_Terminal_Dev/test_md_js8.py`. Notes de version en brouillon : `RELEASE_NOTES_8.5.4.md` (avec le correctif Yaesu).
 
 ### 🔧 Audit du protocole Yaesu (26 septembre 2026) — corrigé dans le code, NON compilé, NON publié

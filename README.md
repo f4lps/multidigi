@@ -40,7 +40,7 @@ FSK/PSK réels).
 - **Mode radio corrigé automatiquement, seulement si la radio le confirme** : une radio en CW, AM, FM ou RTTY est
   ramenée en USB pour les modes audio ; USB, LSB et DATA ne sont jamais modifiés
 - **JS8** : réponse automatique aux HB avec le SNR reçu (`INDICATIF: SNR -12`, comme JS8Call) ; le log automatique envoie le QSO
-  au Tracker **et** à tous les journaux cochés dans « Logger le QSO »
+  au Tracker **et** à tous les journaux cochés dans « Logger le QSO » (envoi en arrière-plan ; aussi avec la macro 73+Log)
 - **Décodage CW plus lisible** : séparation des mots adaptée à l'espacement de l'opérateur, lettres collées
   séparées, plus de « ? » parasites
 - **Tracker** : si la carte web plante au démarrage, le Tracker s'ouvre ensuite avec la grille locale au lieu de

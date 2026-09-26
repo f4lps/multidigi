@@ -1,6 +1,6 @@
-# MultiDigi 8.5.4  (BROUILLON — non publié)
+# MultiDigi 8.5.4
 
-## JS8
+## JS8 et journaux
 - **Réponse automatique à un HB avec le SNR reçu.** Quand « Réponse automatique aux HB reçus » est cochée, MultiDigi répond
   `INDICATIF: SNR -12` (commande JS8 « SNR », comme JS8Call : les réponses aux heartbeats utilisent SNR et non plus ACK), avec le
   rapport en dB avec lequel le HB a été décodé. Sans mesure exploitable, il retombe sur ACK. Une seule réponse par indicatif
@@ -8,7 +8,12 @@
 - **Log automatique = logs cochés + Tracker.** Avec « Log auto QSO quand on me répond » (JS8), le contact est enregistré dans le
   **Tracker** ET envoyé à **tous les journaux cochés** de « Logger le QSO » (HRD, N1MM+, DXLog, Win-Test, WinRef, Log32,
   Log4OM, WaveLog, ClubLog, eQSL, LoTW, QRZ.com), avec les réglages déjà mémorisés. Le résultat (envoyé à…, erreur éventuelle par
-  journal) s'affiche dans l'encart « AUTOMATISMES JS8 » et dans `multidigi_radio.log`. Mode ADIF : `MFSK` / `JS8` pour QRZ.
+  journal) s'affiche dans l'encart « AUTOMATISMES JS8 » et dans `multidigi_radio.log`.
+- **L'envoi se fait en arrière-plan** : QRZ, eQSL, ClubLog, WaveLog ou LoTW hors connexion (jusqu'à 20 s) ne figent plus l'interface.
+- **Le rapport loggué est le SNR** : reçu = SNR de la réponse, envoyé = SNR que nous lui avons transmis dans notre réponse au HB.
+  Mode ADIF « JS8 » (`MFSK` / `JS8` pour QRZ).
+- **La macro 73+Log** envoie aussi aux journaux cochés (avant : Tracker seul).
+- **Correctif WaveLog** : l'envoi échouait toujours (variable non définie).
 
 ## Yaesu (CAT direct)
 - **`RX;` n'existe pas chez Yaesu** : la radio restait en émission après le PTT. Maintenant `TX1;` puis `TX0;`, avec relecture de

@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.3"
+PROGRAM_VERSION_TAG = "8.5.4"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26395,7 +26395,7 @@ class QSOLogDialog(QDialog):
         return w
 
     def _send_wavelog(self):
-        pass
+        now = datetime.utcnow()                 # V8.5.4 : `now` n'était pas défini -> NameError, l'envoi échouait toujours
         try:
             import requests as _req
         except ImportError:
@@ -27120,6 +27120,103 @@ def _f4lps_port_busy_message(port, err):
     return (f"Port {port} déjà utilisé par un autre logiciel (HRD, Win4Icom, DXLog, une autre copie de MultiDigi "
             f"ou de CW Terminal…) que je n'ai pas pu identifier : un service ou un programme lancé en "
             f"administrateur ne peut pas être inspecté. Ferme-le puis réessaie. Détail : {err}")
+
+
+class _HLEdit:
+    """Faux champ de texte / libellé (sans Qt) : permet d'exécuter les envois de QSOLogDialog dans un fil séparé."""
+    def __init__(self, text=''):
+        self._t = str(text)
+
+    def text(self):
+        return self._t
+
+    def setText(self, t):
+        self._t = str(t)
+
+    def isChecked(self):
+        return False
+
+    def __getattr__(self, name):                       # setStyleSheet, setToolTip… : sans effet
+        if name.startswith('__'):
+            raise AttributeError(name)
+        return lambda *a, **k: None
+
+
+class _HLCheck(_HLEdit):
+    def __init__(self, checked=False):
+        super().__init__('')
+        self._c = bool(checked)
+
+    def isChecked(self):
+        return self._c
+
+
+class _HLParent:
+    def __init__(self, settings):
+        self._logbook_settings = settings
+
+    def _save_settings(self):                          # la sauvegarde réelle est faite par la fenêtre principale, dans son fil
+        pass
+
+
+class _HeadlessLog:
+    """Copie sans widgets d'un QSOLogDialog : mêmes méthodes d'envoi (_send_hrd, _send_qrz, …), champs = faux champs."""
+
+
+for _n, _v in list(vars(QSOLogDialog).items()):
+    if _n.startswith('__'):
+        continue
+    if isinstance(_v, (staticmethod, classmethod)) or (callable(_v) and str(getattr(_v, '__qualname__', '')).startswith('QSOLogDialog.')):
+        setattr(_HeadlessLog, _n, _v)
+
+
+def _headless_log_snapshot(dlg):
+    """Photographie les champs d'un QSOLogDialog (dans le fil de l'interface) pour l'envoyer ailleurs sans toucher aux widgets."""
+    ns = _HeadlessLog()
+    for k, v in list(vars(dlg).items()):
+        if isinstance(v, QCheckBox):
+            setattr(ns, k, _HLCheck(v.isChecked()))
+        elif isinstance(v, (QLineEdit, QLabel)):
+            setattr(ns, k, _HLEdit(v.text()))
+        elif isinstance(v, (str, int, float, bool)) or v is None:
+            setattr(ns, k, v)
+    ns._logbook_settings = dict(getattr(dlg, '_logbook_settings', {}) or {})
+    ns._parent = _HLParent(ns._logbook_settings)
+    return ns
+
+
+class _LogSendWorker(QThread):
+    """V8.5.4 F4LPS — envoie un QSO à tous les journaux cochés SANS bloquer l'interface (QRZ, eQSL, ClubLog, WaveLog, LoTW
+    peuvent prendre jusqu'à 20 s hors connexion)."""
+    done = pyqtSignal(list, list, dict)                # envoyés, erreurs, réglages mis à jour
+    MAPPING = [("logsel_hrd", "_send_hrd", "HRD"), ("logsel_n1mm", "_send_n1mm", "N1MM+"), ("logsel_dxlog", "_send_dxlog", "DXLog"),
+               ("logsel_wintest", "_send_wintest", "Win-Test"), ("logsel_winref", "_send_winref", "WinRef"),
+               ("logsel_eqsl", "_send_eqsl", "eQSL"), ("logsel_clublog", "_send_clublog", "ClubLog"),
+               ("logsel_log32", "_send_log32", "Log32"), ("logsel_log4om", "_send_log4om", "Log4OM"),
+               ("logsel_wavelog", "_send_wavelog", "WaveLog"), ("logsel_lotw", "_send_lotw", "LoTW"),
+               ("logsel_qrz", "_send_qrz", "QRZ.com")]
+
+    def __init__(self, snap, parent=None):
+        super().__init__(parent)
+        self.snap = snap
+
+    def run(self):
+        sent, errors = [], []
+        for attr, meth, name in self.MAPPING:
+            cb = getattr(self.snap, attr, None)
+            if cb is None or not cb.isChecked():
+                continue
+            try:
+                getattr(self.snap, meth)()
+                lbl = getattr(self.snap, QSOLogDialog._LOG_STATUS_ATTR.get(attr, ''), None)
+                txt = str(lbl.text()) if lbl is not None else ''
+                if txt.lstrip().startswith('❌'):
+                    errors.append(f"{name}: {txt.lstrip('❌ ').strip()}")
+                else:
+                    sent.append(name)
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+        self.done.emit(sent, errors, dict(self.snap._logbook_settings))
 
 
 def _f4lps_radio_log(msg):
@@ -39401,6 +39498,10 @@ class PSKMainWindow(QMainWindow):
                     snr = max(-30, min(31, int(round(v))))
             except Exception:
                 snr = None
+            if snr is not None:
+                if not hasattr(self, '_js8_snr_sent'):
+                    self._js8_snr_sent = {}
+                self._js8_snr_sent[call] = snr
             what = f"SNR {snr:+d} dB" if snr is not None else "ACK"
             if not self._js8_auto_confirm("Réponse au Heartbeat", f"Répondre au HB de {call} ({what}) ?"):
                 self.js8_auto_status.setText(f"Réponse à {call} refusée")
@@ -39443,7 +39544,22 @@ class PSKMainWindow(QMainWindow):
                 continue
             self._js8_reply_log_last[call] = now
             self._set_active_dxcall(call)
-            if self._auto_log_qso(send_external=True):
+            # V8.5.4 F4LPS — en JS8 le rapport est le SNR : reçu = SNR de cette réponse, envoyé = celui que nous lui avons
+            # transmis dans notre réponse au HB (sinon les champs habituels).
+            _r = _s = None
+            try:
+                v = float(hit.get("snr_db", -99.0))
+                if math.isfinite(v) and v > -99.0:
+                    _r = f"{max(-30, min(31, int(round(v)))):+03d}"
+            except Exception:
+                _r = None
+            try:
+                sv = getattr(self, '_js8_snr_sent', {}).get(call)
+                if sv is not None:
+                    _s = f"{int(sv):+03d}"
+            except Exception:
+                _s = None
+            if self._auto_log_qso(send_external=True, rst_s_override=_s, rst_r_override=_r):
                 self.js8_auto_status.setText(f"📋 QSO logué automatiquement : {call} a répondu")
                 logged_any = True
         return logged_any
@@ -39974,7 +40090,7 @@ class PSKMainWindow(QMainWindow):
         if not raw: return
         text,do_log,stop=self._process_macro_tags(self._expand_macro(raw))
         self.tx_text.setPlainText(text); self._show_emission_tab_ready()
-        if do_log: self._auto_log_qso()
+        if do_log: self._auto_log_qso(send_external=True)      # V8.5.4 : Tracker + journaux cochés
         self._start_tx()
         if stop:
             if getattr(self, '_family', '') == 'JS8':
@@ -40038,15 +40154,43 @@ class PSKMainWindow(QMainWindow):
 
     def _auto_log_send_external(self, call, rst_s, rst_r, name, freq_hz, mode, mycall):
         """Envoie le QSO aux journaux cochés dans « Logger le QSO » (mêmes cases, mêmes réglages que le bouton manuel), sans
-        afficher la fenêtre. Résultat dans la barre d'état et dans multidigi_radio.log."""
+        afficher la fenêtre et SANS bloquer l'interface (fil séparé). Résultat dans js8_auto_status et multidigi_radio.log."""
         try:
             dlg = QSOLogDialog(self, call, rst_s, rst_r, name, freq_hz, mode, mycall)
-            sent, errors = dlg._send_selected_logs(interactive=False)
+            snap = _headless_log_snapshot(dlg)
             dlg.deleteLater()
         except Exception as e:
             _f4lps_radio_log(f"log auto : envoi aux journaux impossible : {type(e).__name__}: {e}")
-            self._set_status(f"⚠️ Log auto {call} : envoi aux journaux impossible ({e})")
+            self._auto_log_report(call, [], [f"préparation : {e}"])
             return
+        if not any(getattr(snap, a, None) is not None and getattr(snap, a).isChecked() for a, _m, _n in _LogSendWorker.MAPPING):
+            self._auto_log_report(call, [], [])
+            return
+        worker = _LogSendWorker(snap, self)
+        if not hasattr(self, '_log_workers'):
+            self._log_workers = []
+        self._log_workers.append(worker)
+        worker.done.connect(lambda sent, errors, st, c=call, w=worker: self._auto_log_send_done(c, sent, errors, st, w))
+        worker.start()
+
+    def _auto_log_send_done(self, call, sent, errors, settings, worker=None):
+        try:                                      # ex. clé QRZ mémorisée par l'envoi : sauvegarde faite ici, dans le fil de l'interface
+            merged = dict(getattr(self, '_logbook_settings', {}) or {})
+            merged.update(settings or {})
+            if merged != (getattr(self, '_logbook_settings', {}) or {}):
+                self._logbook_settings = merged
+                self._save_settings()
+        except Exception:
+            pass
+        self._auto_log_report(call, sent, errors)
+        if worker is not None:
+            try:
+                self._log_workers.remove(worker)
+                worker.deleteLater()
+            except Exception:
+                pass
+
+    def _auto_log_report(self, call, sent, errors):
         _f4lps_radio_log(f"log auto {call} : envoyé à {sent or 'aucun journal coché'} ; erreurs {errors or 'aucune'}")
         if errors:
             msg = (f"⚠️ Log auto {call} : " + ("envoyé à " + ", ".join(sent) + " ; " if sent else "")
@@ -40061,7 +40205,7 @@ class PSKMainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _auto_log_qso(self, send_external=False):
+    def _auto_log_qso(self, send_external=False, rst_s_override=None, rst_r_override=None):
         """Enregistre réellement le QSO quand la macro contient <add-log>.
         send_external=True (log automatique JS8) : envoie aussi le QSO aux journaux cochés, en plus du Tracker.
 
@@ -40093,6 +40237,10 @@ class PSKMainWindow(QMainWindow):
             except Exception:
                 rst_s = self._station_value('log_rst_s', '599') or '599'
                 rst_r = self._station_value('log_rst_r', '599') or '599'
+            if rst_s_override:
+                rst_s = str(rst_s_override)
+            if rst_r_override:
+                rst_r = str(rst_r_override)
             mode = self.mode_combo.currentText() if hasattr(self, 'mode_combo') else "BPSK31"
             name = ''
             try:
