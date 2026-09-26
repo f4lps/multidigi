@@ -25673,6 +25673,8 @@ class QSOLogDialog(QDialog):
             return 'PSK', 'BPSK63'
         if m == 'PSK125':
             return 'PSK', 'BPSK125'
+        if m.startswith('JS8'):                 # ADIF : MODE=MFSK, SUBMODE=JS8
+            return 'MFSK', 'JS8'
         return (m or 'PSK'), ''
 
     def _make_qrz_adif_record(self, call, date_s, time_s, band, mode, mycall,
@@ -25731,7 +25733,14 @@ class QSOLogDialog(QDialog):
                 return name
         return f"{mhz:.3f}MHz"
 
-    def _send_selected_logs(self):
+    _LOG_STATUS_ATTR = {'logsel_hrd': 'hrd_status', 'logsel_n1mm': 'n1mm_status', 'logsel_dxlog': 'dxlog_status',
+                        'logsel_wintest': 'wt_status', 'logsel_winref': 'wr_status', 'logsel_eqsl': 'eq_status',
+                        'logsel_clublog': 'cl_status', 'logsel_log32': 'l32_status', 'logsel_log4om': 'w4_status',
+                        'logsel_wavelog': 'wl_status', 'logsel_lotw': 'lotw_status', 'logsel_qrz': 'q_status'}
+
+    def _send_selected_logs(self, interactive=True):
+        """Envoie aux journaux cochés. interactive=False (log automatique) : aucune boîte de dialogue, retourne
+        (envoyés, erreurs) ; un envoi est compté en erreur si son libellé d'état commence par ❌."""
         sent = []
         errors = []
         try:
@@ -25769,9 +25778,16 @@ class QSOLogDialog(QDialog):
             if cb is not None and cb.isChecked():
                 try:
                     fn()
-                    sent.append(name)
+                    lbl = getattr(self, self._LOG_STATUS_ATTR.get(attr, ''), None)
+                    txt = str(lbl.text()) if lbl is not None else ''
+                    if txt.lstrip().startswith('❌'):
+                        errors.append(f"{name}: {txt.lstrip('❌ ').strip()}")
+                    else:
+                        sent.append(name)
                 except Exception as e:
                     errors.append(f"{name}: {e}")
+        if not interactive:
+            return sent, errors
         if sent and not errors:
             QMessageBox.information(self, "Logs envoyés", "Envoyés : " + ", ".join(sent))
         elif errors:
@@ -31958,17 +31974,19 @@ class PSKMainWindow(QMainWindow):
             "Décoché : l'envoi part directement si Réseau HB ou ACK automatique est activé."
         )
         _auto.addWidget(self.js8_auto_confirm_cb, 2, 0, 1, 2)
-        self.js8_hb_ack_cb = QCheckBox("ACK automatique des HB reçus")
+        self.js8_hb_ack_cb = QCheckBox("Réponse automatique aux HB reçus (avec le SNR)")
         self.js8_hb_ack_cb.setChecked(False)
-        self.js8_hb_ack_cb.setToolTip("Au plus un ACK par indicatif toutes les 30 minutes.")
+        self.js8_hb_ack_cb.setToolTip("Répond à un HB reçu par « INDICATIF: SNR -12 » (le rapport avec lequel le HB a été décodé),\n"
+                                  "comme JS8Call. Au plus une réponse par indicatif toutes les 30 minutes.")
         _auto.addWidget(self.js8_hb_ack_cb, 3, 0, 1, 2)
         # V8.4 F4LPS : logue automatiquement le QSO quand une trame JS8 dirigée
         # (réponse) est reçue avec notre indicatif comme destinataire.
-        self.js8_reply_log_cb = QCheckBox("📋 Log auto QSO quand on me répond")
+        self.js8_reply_log_cb = QCheckBox("📋 Log auto QSO quand on me répond (logs cochés + Tracker)")
         self.js8_reply_log_cb.setChecked(True)
         self.js8_reply_log_cb.setToolTip(
-            "Ajoute automatiquement le contact au log dès qu'une trame JS8 dirigée\n"
-            "nous répond (indicatif destinataire = le nôtre). Décochable ici."
+            "Ajoute automatiquement le contact dès qu'une trame JS8 dirigée nous répond (indicatif destinataire =\n"
+            "le nôtre) : dans le Tracker ET dans tous les journaux cochés de « Logger le QSO » (HRD, N1MM+, DXLog,\n"
+            "QRZ.com, eQSL, LoTW…). Décochable ici."
         )
         _auto.addWidget(self.js8_reply_log_cb, 4, 0, 1, 2)
         self.js8_auto_status = QLabel("Automatismes arrêtés")
@@ -39374,12 +39392,25 @@ class PSKMainWindow(QMainWindow):
             if now - float(self._js8_hb_ack_last.get(call, 0.0)) < 1800.0:
                 continue
             self._js8_hb_ack_last[call] = now
-            if not self._js8_auto_confirm("ACK Heartbeat", f"Répondre ACK au HB de {call} ?"):
-                self.js8_auto_status.setText(f"ACK de {call} refusé")
+            # V8.5.4 F4LPS — JS8Call répond à un heartbeat par « SNR » (rapport reçu), plus par un simple ACK : on envoie
+            # le SNR avec lequel ce HB a été décodé. Sans mesure exploitable, repli sur ACK.
+            snr = None
+            try:
+                v = float(hit.get("snr_db", -99.0))
+                if math.isfinite(v) and v > -99.0:
+                    snr = max(-30, min(31, int(round(v))))
+            except Exception:
+                snr = None
+            what = f"SNR {snr:+d} dB" if snr is not None else "ACK"
+            if not self._js8_auto_confirm("Réponse au Heartbeat", f"Répondre au HB de {call} ({what}) ?"):
+                self.js8_auto_status.setText(f"Réponse à {call} refusée")
                 return False
             self._set_active_dxcall(call)
-            self._prepare_js8_command("ACK")
-            self.js8_auto_status.setText(f"ACK automatique vers {call}")
+            if snr is not None:
+                self._prepare_js8_command("SNR", snr)
+            else:
+                self._prepare_js8_command("ACK")
+            self.js8_auto_status.setText(f"Réponse automatique vers {call} ({what})")
             self._start_tx()
             return True
         return False
@@ -39412,13 +39443,14 @@ class PSKMainWindow(QMainWindow):
                 continue
             self._js8_reply_log_last[call] = now
             self._set_active_dxcall(call)
-            if self._auto_log_qso():
+            if self._auto_log_qso(send_external=True):
                 self.js8_auto_status.setText(f"📋 QSO logué automatiquement : {call} a répondu")
                 logged_any = True
         return logged_any
 
-    def _prepare_js8_command(self, kind):
-        """Prépare une commande JS8Call-like sans lancer l'émetteur."""
+    def _prepare_js8_command(self, kind, number=None):
+        """Prépare une commande JS8Call-like sans lancer l'émetteur. `number` : rapport en dB joint à la commande
+        dirigée (ex. SNR -12), de -30 à +31."""
         kind = str(kind or "").strip().upper()
         mycall = (self._station_value("mycall_edit", "F4LPS") or "F4LPS").upper().strip()
         grid = (self._station_value("locator_edit", "") or
@@ -39442,6 +39474,8 @@ class PSKMainWindow(QMainWindow):
                 self._set_status(f"JS8 {kind} : sélectionnez d'abord un indicatif")
                 return False
             text = f"[JS8:DIR {kind}] {mycall} {dxcall}"
+            if number is not None:
+                text += f" {max(-30, min(31, int(number))):+d}"
         try:
             self.tx_text.setPlainText(text)
             cursor = self.tx_text.textCursor()
@@ -40002,8 +40036,34 @@ class PSKMainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _auto_log_qso(self):
+    def _auto_log_send_external(self, call, rst_s, rst_r, name, freq_hz, mode, mycall):
+        """Envoie le QSO aux journaux cochés dans « Logger le QSO » (mêmes cases, mêmes réglages que le bouton manuel), sans
+        afficher la fenêtre. Résultat dans la barre d'état et dans multidigi_radio.log."""
+        try:
+            dlg = QSOLogDialog(self, call, rst_s, rst_r, name, freq_hz, mode, mycall)
+            sent, errors = dlg._send_selected_logs(interactive=False)
+            dlg.deleteLater()
+        except Exception as e:
+            _f4lps_radio_log(f"log auto : envoi aux journaux impossible : {type(e).__name__}: {e}")
+            self._set_status(f"⚠️ Log auto {call} : envoi aux journaux impossible ({e})")
+            return
+        _f4lps_radio_log(f"log auto {call} : envoyé à {sent or 'aucun journal coché'} ; erreurs {errors or 'aucune'}")
+        if errors:
+            msg = (f"⚠️ Log auto {call} : " + ("envoyé à " + ", ".join(sent) + " ; " if sent else "")
+                   + "ERREUR " + " | ".join(errors))
+        elif sent:
+            msg = f"📋 Log auto {call} : Tracker + " + ", ".join(sent)
+        else:
+            msg = f"📋 Log auto {call} : Tracker (aucun journal coché dans « Logger le QSO »)"
+        self._set_status(msg)
+        try:                                     # la barre d'état est vite remplacée (recherche d'indicatif) : on garde une trace stable
+            self.js8_auto_status.setText(msg)
+        except Exception:
+            pass
+
+    def _auto_log_qso(self, send_external=False):
         """Enregistre réellement le QSO quand la macro contient <add-log>.
+        send_external=True (log automatique JS8) : envoie aussi le QSO aux journaux cochés, en plus du Tracker.
 
         V1.6.123 F4LPS : le bouton 73+Log utilisait seulement _last_dxcall/log_call.
         Si le CALL était saisi dans le champ principal en haut, le log pouvait être ignoré.
@@ -40165,6 +40225,12 @@ class PSKMainWindow(QMainWindow):
                 self._rx_insert_qso_logged_dm780(now, entry["call"])
             except Exception:
                 pass
+            if send_external:
+                _mode_ext = "JS8" if getattr(self, '_family', '') == 'JS8' else entry["mode"]
+                _mycall = (self.mycall_edit.text().strip().upper() if hasattr(self, 'mycall_edit') else '') or 'F4LPS'
+                # différé : la réception JS8 n'est pas retardée par les envois aux journaux
+                QTimer.singleShot(60, lambda c=entry["call"], a=rst_s, b=rst_r, n=name, f=freq_hz, m=_mode_ext, y=_mycall:
+                                  self._auto_log_send_external(c, a, b, n, f, m, y))
             return True
         except Exception as e:
             print(f"⚠️ _auto_log_qso: {e}")

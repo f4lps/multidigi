@@ -72,6 +72,19 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   release GitHub `f4lps/multidigi` avec l'installateur (gh CLI absent : passer par l'API avec le jeton de `git credential fill`).
 - CW Terminal 1.9.2 : code commité (f3a39a9) mais installateur NON construit (arrêté sur demande, priorité MultiDigi).
 
+### 📡 JS8 : réponse HB avec SNR + log auto vers les logs cochés (26 septembre 2026) — codé et testé, NON compilé / NON publié
+- **HB -> réponse `SNR <dB>`** (`_js8_maybe_ack_hits`, `_prepare_js8_command(kind, number)`) : d'après la doc JS8Call, les réponses aux
+  heartbeats utilisent la commande SNR (cmd 25) et non ACK. Rapport = `hit['snr_db']` arrondi, borné -30..+31 ; repli ACK si
+  inconnu. Aller-retour encodage/décodage vérifié (`JS8TXEncoder._pack_message_frames` -> `JS8RXDecoder._decode_js8_payload_v25`).
+- **Log auto** (`js8_reply_log_cb` -> `_js8_maybe_log_reply` -> `_auto_log_qso(send_external=True)`) : Tracker (déjà fait) + envoi différé
+  (QTimer 60 ms) via `QSOLogDialog(...)` NON affiché et `_send_selected_logs(interactive=False)` -> (envoyés, erreurs) ; les cases
+  lues sont `_logbook_settings['logsel_*']`. Résultat dans `js8_auto_status` + `multidigi_radio.log` (la barre d'état est écrasée
+  par la recherche d'indicatif).
+- ⚠️ Points ouverts : (1) la macro `<add-log>` (73+Log) garde l'ancien comportement (Tracker seul) ; (2) les journaux EN LIGNE (QRZ, eQSL,
+  ClubLog, WaveLog, LoTW) s'exécutent dans le fil de l'interface (timeout jusqu'à 20 s si Internet est coupé) : à passer en fil séparé si
+  gênant ; (3) RST loggué = celui des champs (599) et non le SNR reçu ; (4) le mode envoyé aux journaux est « JS8 » (ADIF MFSK/JS8 pour QRZ).
+- Test : `CW_Terminal_Dev/test_md_js8.py`. Notes de version en brouillon : `RELEASE_NOTES_8.5.4.md` (avec le correctif Yaesu).
+
 ### 🔧 Audit du protocole Yaesu (26 septembre 2026) — corrigé dans le code, NON compilé, NON publié
 Signalé : « personne n'arrive à se connecter correctement, surtout pour l'envoi, en CAT ou par HRD ». Sources : Hamlib
 (`newcat.c`, `ft991.c`, `ft891.c`, `ftdx10.c`) et le code de CW Terminal (`YaesuModernCAT`, validé sur un FTDX10).
