@@ -84,6 +84,12 @@ try:
             return _F4LPS_SSL_CTX[0]
 
     _f4lps_ssl._create_default_https_context = _f4lps_shared_https_context
+    # Le verrou seul ne suffit pas (plantage encore vu avec UN seul thread Python dans ssl, pendant que Qt tourne) : on lit les
+    # certificats Windows tout de suite, au démarrage, sur le thread principal, avant que Qt/QtWebEngine ou nos threads ne démarrent.
+    try:
+        _f4lps_shared_https_context()
+    except Exception:
+        pass
 except Exception:
     pass
 

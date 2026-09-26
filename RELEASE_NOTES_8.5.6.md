@@ -12,6 +12,9 @@
 ## Correctif de stabilité
 - Envoi automatique aux journaux (8.5.4) : le fil d'envoi était supprimé avant d'être réellement terminé, ce qui pouvait faire planter le
   programme de temps en temps. Il n'est maintenant supprimé qu'à sa vraie fin.
+- **Fermeture brutale possible pendant la recherche d'un indicatif** (QRZ, HamDB…) : la première connexion sécurisée (https) lisait les
+  certificats de Windows en arrière-plan pendant que l'interface tournait, ce qui faisait parfois planter le programme sans message.
+  Les certificats sont maintenant lus une seule fois, au démarrage. (En test : 3 plantages sur 30 avant, 0 sur 60 après.)
 
 ## HRD (Yaesu et autres radios) : émission plus fiable et diagnostic
 - **Bouton d'émission retrouvé plus sûrement.** Le nom du bouton de HRD varie selon la radio. MultiDigi cherche d'abord un nom exact

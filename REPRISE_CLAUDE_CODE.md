@@ -101,10 +101,13 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
    dans `ssl._load_windows_store_certs` <- `create_default_context` <- `urlopen` de `_lookup_hamdb` (recherche d'indicatif) exécuté EN MÊME TEMPS que l'envoi du log en ligne.
    **Ce risque existait en réel dans les 8.5.4 et 8.5.5 publiées** dès qu'un journal en ligne est coché (à signaler à l'utilisateur, correctif dans la 8.5.6).
 
+   **MISE À JOUR 26/09 (2e conversation)** : le verrou seul NE suffisait PAS (encore 3/30) — la pile montrait UN seul thread Python dans ssl, le principal
+   dans `processEvents` (donc concurrent natif Qt/QtWebEngine). Correctif : le contexte partagé est créé **au chargement du module, sur le thread principal**
+   (appel de `_f4lps_shared_https_context()` juste après son installation). Résultat : **0/60**. Batterie complète (10 tests) : TOUT PASSE.
+
 ## À FAIRE EN PREMIER dans la nouvelle conversation
-- **Vérifier que le correctif SSL supprime le segfault** : lancer `python -X faulthandler test_md_js8.py` en boucle (25-30 fois ; avant correctif : 3/25 et 1/4 plantaient). S'il
-  plante encore, relire la pile (`Windows fatal exception`) ; l'autre suspect serait la suppression de threads Qt.
-- Relancer TOUTE la batterie (dans `CW_Terminal_Dev`, `PYTHONIOENCODING=utf-8`) : `test_md_yaesu_hrd.py test_md_hrdptt.py test_md_hrdport.py test_md_js8.py test_md_yaesu.py
+- ~~Vérifier que le correctif SSL supprime le segfault~~ FAIT (0/60, cf. ci-dessus).
+- ~~Relancer TOUTE la batterie~~ FAIT le 26/09 (tout passe). Pour mémoire, la batterie (dans `CW_Terminal_Dev`, `PYTHONIOENCODING=utf-8`) : `test_md_yaesu_hrd.py test_md_hrdptt.py test_md_hrdport.py test_md_js8.py test_md_yaesu.py
   test_md_native.py test_md_cwmode.py test_md_connect.py test_md_cwfit.py test_md_tracker.py` (les trois derniers de la ligne 2 + native/cwmode/connect exigent COM16/COM17
   LIBRES — l'utilisateur a libéré COM16 ; si occupés : `_f4lps_port_holders`).
 - **Recompiler** l'installateur 8.5.6 (`installer\Output\MultiDigi_Setup_8.5.6.exe` actuel = ANCIEN, sans le CW Yaesu DTR ni les correctifs de stabilité) :
