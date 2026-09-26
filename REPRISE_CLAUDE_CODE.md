@@ -82,7 +82,12 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
 
 ## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- CW Terminal : dernière release **v1.9.3** (CW Icom en messages de 30 car., accusés lus, journal `cw_terminal_civ.log`, port HRD détecté + bouton « Auto HRD »
+- CW Terminal : **v1.9.4 publiée le 26/09** (commits `145f58c` + `8250bfc`, SHA256 `0f3ac1c7…9781` vérifié) : ⚙ Réglages et 📋 LOG aussi dans la barre
+  d'état (le panneau Envoi CW est masqué en fenêtre < 1500×850, ≤ 768 px de haut, grand waterfall) ; choix Mode RX/TX respecté ; fenêtre LOG
+  plantait + envois HRD Logbook/Log4OM/Log32/WaveLog cassés depuis la V1.8 (`now` non défini) ; 5 colonnes multi-décodeur de largeur fixe (bougeaient
+  en réception). Test `test_cwt_boutons.py`. NON corrigés (hors demande) : clic droit SCAN (`QMenu` non importé), message d'erreur du test DTR (`e` dans
+  une lambda). L'utilisateur fait tourner une V1.8 installée dans `C:\Program Files\CW_Terminal_V1.8\`.
+- CW Terminal (avant) : release **v1.9.3** (CW Icom en messages de 30 car., accusés lus, journal `cw_terminal_civ.log`, port HRD détecté + bouton « Auto HRD »
   réparé, Icom : CW + BK-IN vérifiés à la connexion).
 
 ## Travail EN COURS dans MultiDigi (commit `b2ad02b`, NON publié, NON compilé) — futur 8.5.6
