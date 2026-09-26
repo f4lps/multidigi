@@ -64,6 +64,29 @@ import re
 import threading
 import urllib.request
 
+# V8.5.6 F4LPS — plantage (« Windows fatal exception: access violation » dans ssl._load_windows_store_certs) quand deux threads créent en
+# même temps un contexte SSL : la lecture des certificats Windows n'est pas thread-safe. Cela arrive dès que la recherche d'indicatif
+# (HamDB, QRZ…) et l'envoi d'un QSO à un journal en ligne se font au même moment. On crée UN SEUL contexte, sous verrou, partagé ensuite
+# (un contexte SSL peut être partagé entre threads).
+try:
+    import ssl as _f4lps_ssl
+    _F4LPS_SSL_LOCK = threading.Lock()
+    _F4LPS_SSL_CTX = []
+    _f4lps_ssl_orig_ctx = _f4lps_ssl.create_default_context
+
+    def _f4lps_shared_https_context(*args, **kwargs):
+        if args or kwargs:                                    # appel avec options particulières : comportement normal, mais sous verrou
+            with _F4LPS_SSL_LOCK:
+                return _f4lps_ssl_orig_ctx(*args, **kwargs)
+        with _F4LPS_SSL_LOCK:
+            if not _F4LPS_SSL_CTX:
+                _F4LPS_SSL_CTX.append(_f4lps_ssl_orig_ctx())
+            return _F4LPS_SSL_CTX[0]
+
+    _f4lps_ssl._create_default_https_context = _f4lps_shared_https_context
+except Exception:
+    pass
+
 # V97 performance : les classificateurs V93/V94 produisent uniquement des
 # diagnostics et leur retour n'intervient jamais dans le décodage JS8.
 _JS8_SKIP_DIAGNOSTIC_V93 = True
@@ -25201,6 +25224,123 @@ class CWNativeTxThread(QThread):
             self.tx_finished.emit()
 
 
+class CWYaesuDtrTxThread(QThread):
+    """V8.5.6 F4LPS — CW Yaesu avec HRD, MÊME PROTOCOLE QUE CW TERMINAL : HRD commande l'émission (bouton TX), le morse est manipulé par la
+    ligne DTR du port « Standard » de la radio (radio en mode CW, menu PC KEYING = DTR), puis KEY UP et PTT coupé par HRD. Mêmes signaux
+    que CWNativeTxThread pour réutiliser la fin d'émission de la fenêtre principale."""
+    tx_started = pyqtSignal()
+    tx_finished = pyqtSignal()
+    tx_progress = pyqtSignal(int)
+    tx_char_progress = pyqtSignal(int, int)
+    tx_audio = pyqtSignal(object)
+    tx_level = pyqtSignal(float, bool)
+
+    def __init__(self, radio_ctrl, text, wpm=20):
+        super().__init__()
+        self.rc = radio_ctrl
+        self.text = str(text or '')
+        self.wpm = max(5.0, min(60.0, float(wpm)))
+        self._abort = False
+
+    def abort(self):
+        self._abort = True
+
+    @staticmethod
+    def _wait(dt):
+        """Attente précise (le sommeil de Windows a une résolution de ~15 ms, trop grossière pour un point à 30 WPM)."""
+        end = time.perf_counter() + max(0.0, dt)
+        while True:
+            rest = end - time.perf_counter()
+            if rest <= 0:
+                return
+            if rest > 0.02:
+                time.sleep(rest - 0.015)
+            else:
+                time.sleep(0)
+
+    def run(self):
+        rc = self.rc
+        dot = 1.2 / self.wpm
+        txt = RadioController.cw_clean_text(self.text)
+        n_chars = max(1, len(txt))
+        total = float(NativeMorse.units(txt) or 1)
+        done = 0.0
+        rc._tx_active = True
+        ptt = False
+        try:
+            self.tx_started.emit()
+            rc.ptt_on()                                   # HRD : bouton TX
+            ptt = True
+            self._wait(0.10)                              # la radio passe en émission avant le premier point
+            words = txt.split(' ')
+            sent = 0
+            for wi, w in enumerate(words):
+                for ci, ch in enumerate(w):
+                    if self._abort:
+                        break
+                    code = NativeMorse.CODES.get(ch, '')
+                    for k, sym in enumerate(code):
+                        d = dot * (1 if sym == '.' else 3)
+                        rc.yaesu_cw_key(True)
+                        self._wait(d)
+                        rc.yaesu_cw_key(False)
+                        self._wait(dot if k < len(code) - 1 else 0)
+                        done += (1 if sym == '.' else 3) + (1 if k < len(code) - 1 else 0)
+                    if ci < len(w) - 1:
+                        self._wait(dot * 3)                # espace entre lettres
+                        done += 3
+                    sent += 1
+                    self.tx_progress.emit(int(min(99, 100 * done / total)))
+                    self.tx_char_progress.emit(sent, min(n_chars, sent + 1))
+                if self._abort:
+                    break
+                if wi < len(words) - 1:
+                    self._wait(dot * 7)                    # espace entre mots
+                    done += 7
+                    sent += 1
+        finally:
+            try:
+                rc.yaesu_cw_key(False)                     # KEY UP
+            except Exception:
+                pass
+            if ptt:
+                self._wait(0.05)
+                try:
+                    rc.ptt_off()                           # HRD : retour en réception
+                except Exception:
+                    pass
+            rc._tx_active = False
+            self.tx_progress.emit(100)
+            self.tx_char_progress.emit(n_chars, n_chars)
+            self.tx_finished.emit()
+
+
+class NativeMorse:
+    """Table morse et durée (en unités de point) pour l'émission CW manipulée."""
+    CODES = {'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.', 'G': '--.', 'H': '....', 'I': '..', 'J': '.---',
+             'K': '-.-', 'L': '.-..', 'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.', 'S': '...', 'T': '-',
+             'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-', 'Y': '-.--', 'Z': '--..',
+             '0': '-----', '1': '.----', '2': '..---', '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
+             '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..', '/': '-..-.', '=': '-...-', '+': '.-.-.',
+             '-': '-....-', ':': '---...', "'": '.----.', '(': '-.--.', ')': '-.--.-', '@': '.--.-.'}
+
+    @classmethod
+    def units(cls, txt):
+        u, words = 0, str(txt).split(' ')
+        for wi, w in enumerate(words):
+            for ci, ch in enumerate(w):
+                code = cls.CODES.get(ch, '')
+                for k, sym in enumerate(code):
+                    u += 1 if sym == '.' else 3
+                    if k < len(code) - 1:
+                        u += 1
+                if ci < len(w) - 1:
+                    u += 3
+            if wi < len(words) - 1:
+                u += 7
+        return u
+
+
 class PSKTxThread(QThread):
     tx_started  = pyqtSignal()
     tx_finished = pyqtSignal()
@@ -27733,6 +27873,89 @@ class RadioController:
             time.sleep(0.2)
         return False
 
+    # ── CW Yaesu avec HRD : manipulation par DTR sur le port « Standard » (protocole de CW Terminal) ──────────────────
+    def hrd_radio_name(self):
+        """Nom de la radio annoncé par HRD (« get radio »), '' si inconnu."""
+        try:
+            c = getattr(self, '_hrd_client', None)
+            return str(c._send('get radio') or '').strip() if (c and self.connection_type == 'hrd') else ''
+        except Exception:
+            return ''
+
+    @staticmethod
+    def name_is_yaesu(name):
+        return bool(re.match(r'^\s*(FT[\s\-]?\d|FTDX|FT[\s\-]?DX|FTM|YAESU)', str(name or ''), re.I))
+
+    @staticmethod
+    def yaesu_cw_find_port():
+        """Port « Standard » de la radio (celui de la manipulation DTR / du PTT), d'après la description du port ; '' si absent."""
+        try:
+            import serial.tools.list_ports as _lp
+            for p in sorted(_lp.comports(), key=lambda x: x.device):
+                if 'standard' in str(p.description or '').lower():
+                    return p.device
+        except Exception:
+            pass
+        return ''
+
+    def yaesu_cw_ready(self):
+        sp = getattr(self, '_ycw', None)
+        return bool(sp is not None and getattr(sp, 'is_open', False))
+
+    def yaesu_cw_open(self, port_name):
+        """Ouvre le port CW « Standard » comme CW Terminal : 4800 bauds 8N1 (puis 8N2, puis 9600), DTR/RTS BAS avant l'ouverture et
+        après (un DTR levé à l'ouverture ferait partir la radio en émission). Retourne (ok, message)."""
+        if not SERIAL_AVAILABLE:
+            return False, "pyserial non disponible"
+        self.yaesu_cw_close()
+        last = None
+        for baud, stop in ((4800, 1), (4800, 2), (9600, 1)):
+            try:
+                sp = serial.Serial()
+                sp.port = port_name
+                sp.baudrate = baud
+                sp.bytesize, sp.parity, sp.stopbits = 8, 'N', stop
+                sp.timeout, sp.write_timeout = 1, 1
+                sp.rtscts = False
+                sp.dsrdtr = False
+                sp.dtr = False
+                sp.rts = False
+                sp.open()
+                time.sleep(0.05)
+                sp.dtr = False
+                sp.rts = False
+                self._ycw = sp
+                _f4lps_radio_log(f"CW Yaesu : port {port_name} ouvert ({baud} bauds, {stop} bit d'arrêt), DTR/RTS bas")
+                return True, f"CW Yaesu : manipulation DTR sur {port_name}"
+            except Exception as e:
+                last = e
+        return False, (_f4lps_port_busy_message(port_name, last) or str(last))
+
+    def yaesu_cw_close(self):
+        sp = getattr(self, '_ycw', None)
+        self._ycw = None
+        if sp is not None:
+            try:
+                sp.dtr = False
+            except Exception:
+                pass
+            try:
+                sp.close()
+            except Exception:
+                pass
+
+    def yaesu_cw_key(self, down):
+        """KEY DOWN / KEY UP : ligne DTR du port CW."""
+        sp = getattr(self, '_ycw', None)
+        if sp is None:
+            return False
+        try:
+            sp.dtr = bool(down)
+            return True
+        except Exception as e:
+            _f4lps_radio_log(f"CW Yaesu : DTR : {type(e).__name__}: {e}")
+            return False
+
     def get_mode_name(self):
         """V8.5 F4LPS — mode actuel de la radio en texte majuscule ('CW', 'USB', 'DATA-U'…), '' si inconnu.
         Lecture seule (aucune émission). HRD : « get mode » ; OmniRig : bits de mode ; FLRig : rig.get_mode ;
@@ -27826,6 +28049,10 @@ class RadioController:
     def disconnect(self):
         try:
             self.cw_close_aux()
+        except Exception:
+            pass
+        try:
+            self.yaesu_cw_close()
         except Exception:
             pass
         if self.connection_type == 'omnirig':
@@ -30471,6 +30698,37 @@ class RadioCatWindow(QDialog):
                 pass
         self._chk_auto_mode.toggled.connect(_save_opts)
         self._chk_native_cw.toggled.connect(_save_opts)
+        # V8.5.6 : port CW Yaesu (manipulation DTR) pour HRD + Yaesu — même protocole que CW Terminal
+        _yrow = QHBoxLayout()
+        _yrow.addWidget(self._lbl("Port CW Yaesu (DTR) :"))
+        self._ycw_port = QComboBox()
+        self._ycw_port.addItem("Auto (port « Standard »)", "auto")
+        self._ycw_port.addItem("Aucun (CW en audio)", "none")
+        try:
+            import serial.tools.list_ports as _lp3
+            for _p in _lp3.comports():
+                self._ycw_port.addItem(f"{_p.device} — {_p.description[:26]}", _p.device)
+        except Exception:
+            pass
+        _ix2 = self._ycw_port.findData(_cs.get('yaesu_cw_port', 'auto'))
+        if _ix2 >= 0:
+            self._ycw_port.setCurrentIndex(_ix2)
+        self._ycw_port.setToolTip(
+            "Yaesu avec HRD (FTDX10, FT-991A, FT-710…) : le CW est manipulé par la ligne DTR du port « Standard » de la radio,\n"
+            "HRD commandant l'émission, comme dans CW Terminal. Radio en mode CW, menu « PC KEYING » = DTR.\n"
+            "Auto : le port dont le nom contient « Standard ».")
+        _yrow.addWidget(self._ycw_port, 1)
+        ol.addLayout(_yrow)
+        def _save_ycw(_=None):
+            try:
+                cs = dict(getattr(self.main, '_cat_settings', {}) or {})
+                cs['yaesu_cw_port'] = self._ycw_port.currentData() or 'auto'
+                self.main._cat_settings = cs
+                self.main.radio_ctrl.yaesu_cw_close()
+                self.main._save_settings()
+            except Exception:
+                pass
+        self._ycw_port.currentIndexChanged.connect(_save_ycw)
         lay.addWidget(g_opt)
 
         # ── HRD ───────────────────────────────────────────────────────────────
@@ -37471,6 +37729,9 @@ class PSKMainWindow(QMainWindow):
             if getattr(self, '_tx_active', False):
                 return
             fam = fam or getattr(self, '_family', '')
+            if fam == 'CW' and self._cw_yaesu_prepare():
+                self._set_status("🟠 CW Yaesu : PTT par HRD + manipulation DTR sur le port Standard")
+                return
             if fam == 'CW' and self._opt('native_cw', True):
                 self._cw_native_prepare()
                 return
@@ -37482,6 +37743,54 @@ class PSKMainWindow(QMainWindow):
         except Exception as e:
             print(f"⚠️ mode radio automatique : {type(e).__name__}: {e}")
             self._radio_log(f"erreur mode automatique : {type(e).__name__}: {e}")
+
+    def _cw_yaesu_prepare(self):
+        """CW Yaesu avec HRD (protocole de CW Terminal) possible ? Oui si : HRD connecté, radio Yaesu (nom annoncé par HRD ou protocole
+        du panneau RADIO CAT), radio en mode CW, et un port CW « Standard » utilisable (manipulation DTR). Sinon False (CW en audio)."""
+        rc = getattr(self, 'radio_ctrl', None)
+        self._cw_yaesu_reason = ''
+        if rc is None or not getattr(rc, 'connected', False) or rc.connection_type != 'hrd':
+            return False
+        cs = dict(getattr(self, '_cat_settings', {}) or {})
+        name = rc.hrd_radio_name()
+        if not (RadioController.name_is_yaesu(name) or str(cs.get('protocol', '')).startswith('yaesu')):
+            return False                                             # pas une Yaesu : autre chemin
+        if not self._opt('native_cw', True):
+            self._cw_yaesu_reason = "l'option « CW par le manipulateur de la radio » est décochée (RADIO CAT)"
+            return False
+        mode = str(rc.get_mode_name() or '').upper()
+        if not mode.startswith('CW'):
+            self._cw_yaesu_reason = f"la radio n'est pas en mode CW (HRD indique « {mode or '?'} ») : CW en audio"
+            self._radio_log("CW Yaesu : " + self._cw_yaesu_reason)
+            return False
+        if not rc.yaesu_cw_ready():
+            want = str(cs.get('yaesu_cw_port', 'auto') or 'auto')
+            if want == 'none':
+                self._cw_yaesu_reason = "port CW Yaesu réglé sur « Aucun »"
+                return False
+            port = RadioController.yaesu_cw_find_port() if want == 'auto' else want
+            if not port:
+                self._cw_yaesu_reason = ("aucun port « Standard » trouvé : choisis le port CW de la radio dans RADIO CAT → « Port CW Yaesu (DTR) »")
+                self._radio_log("CW Yaesu : " + self._cw_yaesu_reason)
+                return False
+            ok, msg = rc.yaesu_cw_open(port)
+            if not ok:
+                self._cw_yaesu_reason = msg
+                self._radio_log("CW Yaesu : ouverture impossible — " + msg)
+                return False
+        return True
+
+    def _start_tx_cw_yaesu(self):
+        """Lance l'émission CW Yaesu (HRD + DTR) à la place du thread audio."""
+        wpm = float(getattr(self.encoder_obj, 'wpm', 20.0) or 20.0)
+        self.tx_thread = CWYaesuDtrTxThread(self.radio_ctrl, self._pending_tx_text, wpm)
+        self.tx_thread.tx_started.connect(self._on_tx_started)
+        self.tx_thread.tx_started.connect(lambda: self._set_status(
+            f"📡 CW Yaesu : PTT par HRD + manipulation DTR ({wpm:.0f} WPM)"))
+        self.tx_thread.tx_finished.connect(self._on_tx_finished)
+        self.tx_thread.tx_progress.connect(self.tx_progress.setValue)
+        self.tx_thread.tx_char_progress.connect(self._on_tx_char_progress)
+        self.tx_thread.start()
 
     def _start_tx_cw_native(self):
         """Lance l'émission CW par le manipulateur de la radio (à la place du thread audio)."""
@@ -37594,8 +37903,11 @@ class PSKMainWindow(QMainWindow):
         # V8.5 F4LPS : le CW de MultiDigi part en AUDIO (note sinusoïdale). Une radio en mode CW l'ignore : elle
         # passe en émission (PTT) mais n'envoie AUCUN morse. On le détecte avant d'émettre.
         self._cw_native_pending = False
+        self._cw_yaesu_pending = False
         if getattr(self, '_family', '') == 'CW':
-            if self._cw_native_prepare():
+            if self._cw_yaesu_prepare():
+                self._cw_yaesu_pending = True           # CW Yaesu : HRD (PTT) + DTR sur le port Standard, sans audio
+            elif self._cw_native_prepare():
                 self._cw_native_pending = True          # CW par le manipulateur de la radio, sans audio
             elif not self._cw_radio_mode_ok():          # repli audio : la radio ne doit pas être en CW
                 return
@@ -37681,6 +37993,12 @@ class PSKMainWindow(QMainWindow):
             self._rx_was_active = False; self._launch_tx()
 
     def _launch_tx(self):
+        if getattr(self, "_family", "") == "CW" and getattr(self, "_cw_yaesu_pending", False):
+            self._cw_yaesu_pending = False
+            self._tx_launch_time = time.time()
+            self._tx_min_hold_until = self._tx_launch_time
+            QTimer.singleShot(0, self._start_tx_cw_yaesu)
+            return
         if getattr(self, "_family", "") == "CW" and getattr(self, "_cw_native_pending", False):
             # CW natif : pas de PTT (la radio passe en émission toute seule, BK-IN) ni d'audio.
             self._cw_native_pending = False
@@ -40287,10 +40605,23 @@ class PSKMainWindow(QMainWindow):
         if not hasattr(self, '_log_workers'):
             self._log_workers = []
         self._log_workers.append(worker)
-        worker.done.connect(lambda sent, errors, st, c=call, w=worker: self._auto_log_send_done(c, sent, errors, st, w))
+        worker.done.connect(lambda sent, errors, st, c=call: self._auto_log_send_done(c, sent, errors, st))
+        # V8.5.6 : le fil n'est supprimé qu'une fois RÉELLEMENT terminé (signal finished), pas quand il émet son résultat depuis run()
+        # — sinon « QThread: Destroyed while thread is still running » et plantage de temps en temps.
+        worker.finished.connect(lambda w=worker: self._auto_log_worker_gone(w))
         worker.start()
 
-    def _auto_log_send_done(self, call, sent, errors, settings, worker=None):
+    def _auto_log_worker_gone(self, worker):
+        try:
+            self._log_workers.remove(worker)
+        except Exception:
+            pass
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
+
+    def _auto_log_send_done(self, call, sent, errors, settings):
         try:                                      # ex. clé QRZ mémorisée par l'envoi : sauvegarde faite ici, dans le fil de l'interface
             merged = dict(getattr(self, '_logbook_settings', {}) or {})
             merged.update(settings or {})
@@ -40300,12 +40631,6 @@ class PSKMainWindow(QMainWindow):
         except Exception:
             pass
         self._auto_log_report(call, sent, errors)
-        if worker is not None:
-            try:
-                self._log_workers.remove(worker)
-                worker.deleteLater()
-            except Exception:
-                pass
 
     def _auto_log_report(self, call, sent, errors):
         _f4lps_radio_log(f"log auto {call} : envoyé à {sent or 'aucun journal coché'} ; erreurs {errors or 'aucune'}")

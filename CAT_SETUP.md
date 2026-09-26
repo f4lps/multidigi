@@ -123,8 +123,18 @@ FT-847/857/897 ; le FT-100 utilise d'autres codes, non gérés.
 - **PTT par CAT** : dans la radio, « DATA PTT SELECT » / « PTT SELECT » sur **CAT** (ou DAKY) et non RTS/DTR si tu veux que `TX1;`
   fasse émettre.
 
-**Avec HRD (ou OmniRig, FLRig) :** le PTT est celui du logiciel. MultiDigi ne peut pas changer le mode de façon vérifiable
-(HRD ignore souvent la commande) : mets la radio en **USB / DATA-USB** avant d'émettre. Une radio restée en CW émet sans morse.
+**Yaesu avec HRD, en CW (même protocole que CW Terminal) :** HRD commande la fréquence et l'**émission** (bouton TX) ; le morse est
+**manipulé par la ligne DTR du port « Standard »** de la radio (FTDX10, FT-991A, FT-710… : la radio expose deux ports, « Enhanced »
+pour le CAT et « Standard » pour la manipulation). Il faut :
+- la radio en **mode CW** ;
+- dans la radio, le réglage **PC KEYING** (le nom varie selon le modèle) sur **DTR** ;
+- dans MultiDigi, **RADIO CAT → « Mode radio et CW » → « Port CW Yaesu (DTR) »** : « Auto » prend le port dont le nom contient
+  « Standard », ou choisis le port ; « Aucun » = CW en audio. La case « CW par le manipulateur de la radio » doit être cochée.
+MultiDigi reconnaît la Yaesu par le nom annoncé par HRD. Si la radio n'est pas en CW (USB / DATA), le CW part en audio comme avant.
+Tout est noté dans `multidigi_radio.log`.
+
+**Avec HRD (ou OmniRig, FLRig), pour les modes audio :** MultiDigi ne peut pas changer le mode de façon vérifiable (HRD ignore souvent
+la commande) : mets la radio en **USB / DATA-USB** avant d'émettre. Une radio restée en CW émet sans morse.
 
 ### Comment savoir lequel choisir si tu doutes ?
 
