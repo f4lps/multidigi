@@ -82,7 +82,11 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
 
 ## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- CW Terminal : **v1.9.4 publiée le 26/09** (commits `145f58c` + `8250bfc`, SHA256 `0f3ac1c7…9781` vérifié) : ⚙ Réglages et 📋 LOG aussi dans la barre
+- CW Terminal : **v1.9.5 publiée le 26/09** (commits `6695d3d`, `0b17589`, `d80c516` ; SHA256 `ae59db6b…3022` vérifié) : clic droit sur ▲/▼ SCAN =
+  seuil SNR / rebouclage / auto-LOCK (plage, pas, pause retirés : sans effet, pas 10 Hz et pause 60 ms figés dans `_start_scan`) ; bouton « 🔧 Test DTR »
+  dans Réglages connexion (DTR toujours redescendu, refusé pendant une émission) ; signal `_status_msg_sig` pour les messages depuis un thread
+  (QTimer.singleShot depuis un thread Python ne part JAMAIS) ; fin TX continu Icom sans singleShot. Réglages du scan non mémorisés entre deux lancements.
+- CW Terminal : v1.9.4 publiée le 26/09 (commits `145f58c` + `8250bfc`, SHA256 `0f3ac1c7…9781` vérifié) : ⚙ Réglages et 📋 LOG aussi dans la barre
   d'état (le panneau Envoi CW est masqué en fenêtre < 1500×850, ≤ 768 px de haut, grand waterfall) ; choix Mode RX/TX respecté ; fenêtre LOG
   plantait + envois HRD Logbook/Log4OM/Log32/WaveLog cassés depuis la V1.8 (`now` non défini) ; 5 colonnes multi-décodeur de largeur fixe (bougeaient
   en réception). Test `test_cwt_boutons.py`. NON corrigés (hors demande) : clic droit SCAN (`QMenu` non importé), message d'erreur du test DTR (`e` dans
