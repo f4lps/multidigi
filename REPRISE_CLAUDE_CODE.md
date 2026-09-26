@@ -72,6 +72,65 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   release GitHub `f4lps/multidigi` avec l'installateur (gh CLI absent : passer par l'API avec le jeton de `git credential fill`).
 - CW Terminal 1.9.2 : code commité (f3a39a9) mais installateur NON construit (arrêté sur demande, priorité MultiDigi).
 
+# ▶▶▶ POINT DE REPRISE — À LIRE EN PREMIER (26 septembre 2026, fin de conversation)
+
+**Utilisateur** : F4LPS (radioamateur, français, tutoiement, informel). Deux programmes : **MultiDigi** (`C:\Users\14frs\Documents\radio\miltidigi`,
+branche de travail `cw-fit-et-connexions`, source unique `MultiDigi_FINAL_JS8_20260904.py`) et **CW Terminal** (`...\radio\CW_Terminal_Dev`, branche `master`,
+source `cw_terminal.py` + `cw_fit_decoder.py`). Tests dans `CW_Terminal_Dev\test_*.py`. **Règles constantes** : ne rien publier / pousser / fusionner sans accord
+explicite (« ok on publie ») ; ne rien toucher d'autre que ce qui est demandé ; toujours tester (faux ports / fausse radio / faux serveur HRD, dossier utilisateur
+temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle ici) ; vérifier le SHA256 du fichier téléchargé après publication.
+
+## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
+- MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
+- CW Terminal : dernière release **v1.9.3** (CW Icom en messages de 30 car., accusés lus, journal `cw_terminal_civ.log`, port HRD détecté + bouton « Auto HRD »
+  réparé, Icom : CW + BK-IN vérifiés à la connexion).
+
+## Travail EN COURS dans MultiDigi (commit `b2ad02b`, NON publié, NON compilé) — futur 8.5.6
+1. **CW Yaesu + HRD par DTR, MÊME PROTOCOLE QUE CW TERMINAL** (demande de l'utilisateur : « fais le même protocole de HRD Yaesu que CW Terminal, ne touche pas à
+   autre chose »). Additif : `CWYaesuDtrTxThread` + `NativeMorse` (avant `PSKTxThread`), `RadioController.hrd_radio_name / name_is_yaesu / yaesu_cw_find_port /
+   yaesu_cw_open / yaesu_cw_close / yaesu_cw_key` (avant `get_mode_name`, + fermeture dans `disconnect`), fenêtre : `_cw_yaesu_prepare`, `_start_tx_cw_yaesu`,
+   branche dans `_start_tx` (avant `_cw_native_prepare`), `_launch_tx`, `_apply_radio_mode_for_family` ; RADIO CAT → « Mode radio et CW » → combo « Port CW Yaesu (DTR) »
+   (`yaesu_cw_port` : auto / none / COMx). Séquence : PTT par HRD (bouton TX) -> DTR haut/bas sur le port « Standard » (4800 bauds 8N1, DTR/RTS BAS avant/après
+   ouverture) -> KEY UP -> PTT OFF. Yaesu reconnue par `get radio` (HRD) ou protocole du panneau ; seulement si la radio est en mode CW (`get mode` commence par CW),
+   sinon CW audio comme avant. Test : `test_md_yaesu_hrd.py` (TOUT PASSE : durées 1/3 unités, PTT avant/après, arrêt, choix du chemin). Une seule ligne existante modifiée
+   (le dispatch de `_start_tx`). Notes : `RELEASE_NOTES_8.5.6.md`, `CAT_SETUP.md` (section Yaesu + HRD).
+2. **Bouton PTT HRD plus sûr + journal** (`_find_ptt_button` : nom exact, sinon commence par TX/PTT hors TX Clar/Monitor…, liste séparée par , ; ou retours ; commande
+   réessayée une fois ; `describe()` écrit radio/version/mode/boutons dans `multidigi_radio.log`). Test : `test_md_hrdptt.py`.
+3. **Correctif de stabilité** : (a) `_auto_log_worker_gone` : le fil `_LogSendWorker` n'est supprimé qu'à son signal `finished` ; (b) **contexte SSL partagé sous verrou** en tête
+   du fichier (`_f4lps_shared_https_context`) car `test_md_js8.py` faisait un **segfault intermittent (exit 139, ~3 runs sur 25)** : « Windows fatal exception: access violation »
+   dans `ssl._load_windows_store_certs` <- `create_default_context` <- `urlopen` de `_lookup_hamdb` (recherche d'indicatif) exécuté EN MÊME TEMPS que l'envoi du log en ligne.
+   **Ce risque existait en réel dans les 8.5.4 et 8.5.5 publiées** dès qu'un journal en ligne est coché (à signaler à l'utilisateur, correctif dans la 8.5.6).
+
+## À FAIRE EN PREMIER dans la nouvelle conversation
+- **Vérifier que le correctif SSL supprime le segfault** : lancer `python -X faulthandler test_md_js8.py` en boucle (25-30 fois ; avant correctif : 3/25 et 1/4 plantaient). S'il
+  plante encore, relire la pile (`Windows fatal exception`) ; l'autre suspect serait la suppression de threads Qt.
+- Relancer TOUTE la batterie (dans `CW_Terminal_Dev`, `PYTHONIOENCODING=utf-8`) : `test_md_yaesu_hrd.py test_md_hrdptt.py test_md_hrdport.py test_md_js8.py test_md_yaesu.py
+  test_md_native.py test_md_cwmode.py test_md_connect.py test_md_cwfit.py test_md_tracker.py` (les trois derniers de la ligne 2 + native/cwmode/connect exigent COM16/COM17
+  LIBRES — l'utilisateur a libéré COM16 ; si occupés : `_f4lps_port_holders`).
+- **Recompiler** l'installateur 8.5.6 (`installer\Output\MultiDigi_Setup_8.5.6.exe` actuel = ANCIEN, sans le CW Yaesu DTR ni les correctifs de stabilité) :
+  `Remove-Item -Recurse -Force build, dist` puis `& 'C:\Program Files\Python311\python.exe' -m PyInstaller --name MultiDigi --onedir --windowed --noconfirm --icon installer\multidigi.ico
+  --exclude-module tensorflow ... (liste dans le script du 26/09, cf. section « Outillage installeur » plus bas)  MultiDigi_FINAL_JS8_20260904.py` puis
+  `& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\MultiDigi.iss` (~5-10 min ; le PowerShell bloque `Remove-Item` avec « Program Files » dans la même commande :
+  séparer). Tester l'exe (`dist\MultiDigi\MultiDigi.exe` avec USERPROFILE temporaire), donner l'installateur, PUBLIER SEULEMENT SUR ACCORD (même procédure que 8.5.5 :
+  `git checkout main && git merge --ff-only cw-fit-et-connexions && git push origin main`, release via l'API GitHub avec le jeton de `git credential fill`, `gh` absent, puis
+  comparer le SHA256 téléchargé, puis `git checkout cw-fit-et-connexions`).
+
+## Questions / points ouverts avec l'utilisateur
+- **CAT direct Yaesu** : « ni CW Terminal ni MultiDigi n'arrivent à se connecter en CAT direct Yaesu » — NON résolu (MultiDigi 8.5.4 a corrigé : TX0;, 2 bits d'arrêt, DTR/RTS bas, recherche de
+  vitesse, mais l'utilisateur dit que ça ne marche toujours pas ; CW Terminal : `YaesuModernCAT` non modifié sauf MD03;/MD02;). Demander : modèle, port (Enhanced ?), vitesse CAT RATE,
+  message exact, et `multidigi_radio.log`. Ne PAS y toucher sans demande (« ne touche pas à autre chose »).
+- OM avec IC-7300 + HRD 6.9 : TX sans puissance / porteuse quand BK-IN allumé (réglage radio « USB Keying (CW) » = DTR probable) — attend ses réponses (`multidigi_radio.log`).
+- Idées non faites : retirer le bouton « Émettre quand même » (message « radio en mode CW ») ; régler le BK-IN automatiquement dans MultiDigi (fait seulement dans CW Terminal) ;
+  contrôleur CI-V distinct (0xE1) pour la liaison auxiliaire si HRD perd la radio (« The connection with IC-7300 on COM7 has stopped working » — hypothèses : trames 0x17 > 30 car. (corrigé
+  en CW Terminal 1.9.3), réponses non lues, partage d'adresse E0 avec HRD) ; CW natif Yaesu par `KY`.
+- CW Terminal : le HRD + Yaesu y marche (dixit l'utilisateur) ; aucun changement à y faire pour l'instant.
+
+## Environnement utile
+- Ports COM virtuels Eltima : COM10-11, 12-13, 14-15, 16-17 ; l'utilisateur en tient certains (routeur COM, HRD, Win4Icom, OmniRig, son MultiDigi). Ne JAMAIS y émettre. Ses HRD 6.8 = 7809.
+- Python 3.11 (`C:\Program Files\Python311`) pour les tests et le build ; l'utilisateur lance depuis les sources avec Python 3.13.
+- Fichiers de journal : `%USERPROFILE%\multidigi_radio.log`, `multidigi_crash.log`, `multidigi_map_crash2.flag` (MultiDigi) ; `%APPDATA%\CWTerminal\cw_terminal_civ.log` (CW Terminal).
+- Outils : `Write`/`Edit` pour les fichiers contenant des antislashs (le shell et l'outil Bash mangent `\n` et `\\`) ; pour insérer des NUL/escapes utiliser `chr(92)`.
+
 ### 📡 JS8 : réponse HB avec SNR + log auto vers les logs cochés (26 septembre 2026) — dans la 8.5.4 (compilée, NON publiée)
 - **HB -> réponse `SNR <dB>`** (`_js8_maybe_ack_hits`, `_prepare_js8_command(kind, number)`) : d'après la doc JS8Call, les réponses aux
   heartbeats utilisent la commande SNR (cmd 25) et non ACK. Rapport = `hit['snr_db']` arrondi, borné -30..+31 ; repli ACK si
