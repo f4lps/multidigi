@@ -27106,6 +27106,15 @@ def _f4lps_port_busy_message(port, err):
             f"administrateur ne peut pas être inspecté. Ferme-le puis réessaie. Détail : {err}")
 
 
+def _f4lps_radio_log(msg):
+    """Journal ~/multidigi_radio.log (mode radio, CW, PTT, connexion) : à joindre à un rapport de problème."""
+    try:
+        with open(os.path.join(os.path.expanduser('~'), 'multidigi_radio.log'), 'a', encoding='utf-8') as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
 class RadioController:
     def __init__(self):
         self.connection_type=None; self.serial_port=None
@@ -27127,8 +27136,23 @@ class RadioController:
         if not SERIAL_AVAILABLE: return False,"pyserial non disponible"
         try:
             if self.serial_port and self.serial_port.is_open: self.serial_port.close()
-            self.serial_port=serial.Serial(port=port,baudrate=baudrate,
-                bytesize=8,parity='N',stopbits=1,timeout=1,write_timeout=1)
+            if protocol in ('yaesu', 'yaesu_ascii'):
+                # V8.5.4 F4LPS — Yaesu : pyserial LÈVE DTR et RTS à l'ouverture par défaut ; sur une interface où RTS est le
+                # PTT (port « Standard » des FTDX10/FT-991A/FT-891, câbles CAT+PTT) la radio partait en émission dès
+                # CONNECTER (la 8.4.7 n'avait supprimé que le forçage explicite, pas ce défaut). On ouvre donc avec
+                # DTR/RTS bas. Les Yaesu CAT attendent 8 bits, pas de parité et 2 bits d'arrêt (Hamlib, CW Terminal).
+                _sp = serial.Serial()
+                _sp.port = port
+                _sp.baudrate = int(baudrate)
+                _sp.bytesize, _sp.parity, _sp.stopbits = 8, 'N', 2
+                _sp.timeout, _sp.write_timeout = 1, 1
+                _sp.dtr = False
+                _sp.rts = False
+                _sp.open()
+                self.serial_port = _sp
+            else:
+                self.serial_port=serial.Serial(port=port,baudrate=baudrate,
+                    bytesize=8,parity='N',stopbits=1,timeout=1,write_timeout=1)
             # V8.4.2 F4LPS : de nombreux adaptateurs USB-CI-V/CAT (et ports
             # série virtuels type Eltima) exigent DTR/RTS actifs pour
             # alimenter le circuit ou établir la liaison — sans ça, le port
@@ -27152,6 +27176,8 @@ class RadioController:
                 except Exception:
                     pass
             self.connection_type='serial'; self.protocol=protocol; self.civ_address=civ_address
+            if protocol in ('yaesu', 'yaesu_ascii'):
+                return self._yaesu_connect_finish(port, baudrate, protocol)
             # V8.4.3 F4LPS : sur certains ports virtuels (Eltima...), le pont
             # met un instant à s'établir juste après l'ouverture — un premier
             # échange immédiat peut partir dans le vide. On laisse le temps
@@ -27225,6 +27251,65 @@ class RadioController:
         except Exception as e:
             _busy = _f4lps_port_busy_message(port, e)
             return False, (_busy or str(e))
+
+    _YAESU_IDS = {'0650': 'FT-891', '0670': 'FT-991/991A', '0761': 'FTDX10', '0681': 'FTDX101D', '0682': 'FTDX101MP',
+                  '0800': 'FT-710', '0460': 'FTDX3000', '0244': 'FT-450', '0310': 'FT-950'}
+
+    def _yaesu_connect_finish(self, port, baudrate, protocol):
+        """Connexion Yaesu : essaie la vitesse choisie puis les vitesses usuelles (4800 par défaut sur FT-891/991A, 38400 sur
+        FTDX10/101/710), avec RTS bas ; si rien ne répond et que le port est un port « Enhanced », réessaie avec RTS levé
+        (contrôle de flux CAT RTS de la radio). Un port « Standard » (PTT / manipulation) n'est JAMAIS levé."""
+        time.sleep(0.3)
+        ascii_ = protocol == 'yaesu_ascii'
+        reader = (lambda: self._yaesu_ascii_get_freq(0.4)) if ascii_ else self._yaesu_get_freq
+        first = int(baudrate)
+        pool = (38400, 4800, 9600, 19200, 115200) if ascii_ else (9600, 4800, 38400)
+        bauds = [first] + [b for b in pool if b != first]
+        desc = ''
+        try:
+            import serial.tools.list_ports as _lp
+            desc = next((str(x.description) for x in _lp.comports() if x.device.upper() == str(port).upper()), '')
+        except Exception:
+            pass
+        dl = desc.lower()
+        variants = [False] + ([True] if 'enhanced' in dl else [])
+        for rts_up in variants:
+            try:
+                self.serial_port.dtr = False
+                self.serial_port.rts = rts_up
+            except Exception:
+                pass
+            time.sleep(0.05)
+            for b in bauds:
+                try:
+                    self.serial_port.baudrate = b
+                    time.sleep(0.08)
+                    if ascii_:
+                        self.serial_port.reset_input_buffer()
+                    f = reader()
+                except Exception:
+                    f = 0
+                if f:
+                    self.last_baud = b
+                    model = ''
+                    if ascii_:
+                        rid = self._yaesu_ascii_id()
+                        if rid:
+                            model = ' ' + self._YAESU_IDS.get(rid[2:6], rid)
+                    note = f"Yaesu{model}, 2 bits d'arrêt, RTS {'levé (port Enhanced)' if rts_up else 'bas'}"
+                    _f4lps_radio_log(f"Yaesu connecté {port} @ {b} : {f} Hz ({note})")
+                    return True, f"Connecté {port} {b}bd — {f/1e6:.4f} MHz ({note})"
+        try:
+            self.serial_port.rts = False
+        except Exception:
+            pass
+        tip = ("Ce port est le port STANDARD (PTT / manipulation) : pour le CAT choisis le port « Enhanced ». "
+               if 'standard' in dl else "")
+        _f4lps_radio_log(f"Yaesu {port} : aucune réponse (vitesses essayées {bauds}, port « {desc} »)")
+        return True, (f"Connecté {port} — ⚠️ aucune réponse de la radio Yaesu (vitesses essayées : "
+                      f"{', '.join(str(b) for b in bauds)} bauds, 2 bits d'arrêt). {tip}Vérifie : le port « Enhanced » "
+                      f"(pas « Standard »), le menu CAT RATE de la radio, CAT RTS, et le protocole "
+                      f"(« ASCII » pour FT-891/991A/FTDX10/101/710).")
 
     def connect_omnirig(self, rig_number=1):
         try:
@@ -27301,7 +27386,8 @@ class RadioController:
                     # la fréquence se lisait mais l'émission ne partait jamais
                     # en connexion série directe (hors OmniRig/HRD/FLRig).
                     self._yaesu_ptt_on()
-        except: pass
+        except Exception as _e:
+            _f4lps_radio_log(f"PTT ON : erreur {type(_e).__name__}: {_e}")
 
     def ptt_off(self):
         if not self.connected: return
@@ -27320,6 +27406,8 @@ class RadioController:
                     self._yaesu_ascii_ptt_off()
                 else:
                     self._yaesu_ptt_off()
+        except Exception as _e:
+            _f4lps_radio_log(f"PTT OFF : erreur {type(_e).__name__}: {_e}")
         finally:
             # V8.4.4 F4LPS : reprise du polling fréquence dans tous les cas,
             # même si l'écriture série a levé une exception.
@@ -27527,6 +27615,8 @@ class RadioController:
         if not self.connected:
             return ''
         try:
+            if self.connection_type == 'serial' and self.protocol == 'yaesu_ascii' and self.serial_port:
+                return self._yaesu_ascii_mode_name()
             if self.connection_type == 'hrd':
                 c = getattr(self, '_hrd_client', None)
                 return str(c._send('get mode') or '').strip().upper() if c else ''
@@ -27722,12 +27812,12 @@ class RadioController:
             self.serial_port.write(bcd + bytes([0x01]))
 
     def _yaesu_ptt_on(self):
-        """CAT Yaesu 5 octets : commande 0x0F, P1=0x00 -> TX ON."""
-        self.serial_port.write(bytes([0x00, 0, 0, 0, 0x0F]))
+        """CAT Yaesu 5 octets (FT-847/857/897) : commande 0x08 = PTT ON. (0x0F est propre au FT-100.)"""
+        self.serial_port.write(bytes([0x00, 0, 0, 0, 0x08]))
 
     def _yaesu_ptt_off(self):
-        """CAT Yaesu 5 octets : commande 0x0F, P1=0x80 -> TX OFF (RX)."""
-        self.serial_port.write(bytes([0x80, 0, 0, 0, 0x0F]))
+        """CAT Yaesu 5 octets (FT-847/857/897) : commande 0x88 = PTT OFF."""
+        self.serial_port.write(bytes([0x00, 0, 0, 0, 0x88]))
 
     # ── Yaesu CAT ASCII (FT-891, FT-991A, FTDX10, FTDX101, FT-710...) ──────
     # V8.4.6 F4LPS : ces radios n'utilisent PAS l'ancien CAT binaire 5
@@ -27757,14 +27847,14 @@ class RadioController:
                 time.sleep(0.02)
         return buf
 
-    def _yaesu_ascii_get_freq(self):
+    def _yaesu_ascii_get_freq(self, wait=0.6):
         with self._lock:
             try:
                 self.serial_port.reset_input_buffer()
             except Exception:
                 pass
             self.serial_port.write(b'FA;')
-            resp = self._yaesu_ascii_read_line(0.6)
+            resp = self._yaesu_ascii_read_line(wait)
         # Réponse attendue : b'FA' + 8 ou 9 chiffres (Hz) + b';'
         if not resp.startswith(b'FA') or b';' not in resp:
             return 0
@@ -27779,13 +27869,84 @@ class RadioController:
         with self._lock:
             self.serial_port.write(cmd)
 
+    def _yaesu_ascii_query(self, cmd, wait=0.3):
+        """Envoie une commande de lecture (ex. b'TX;') et retourne la réponse (sans prendre le verrou : l'appelant l'a)."""
+        try:
+            self.serial_port.reset_input_buffer()
+        except Exception:
+            pass
+        self.serial_port.write(cmd)
+        return self._yaesu_ascii_read_line(wait)
+
+    def _yaesu_ascii_tx_state(self):
+        """État d'émission lu par « TX; » : 0 = réception, 1/2 = émission, None = pas de réponse exploitable."""
+        r = self._yaesu_ascii_query(b'TX;', 0.3)
+        m = re.search(rb'TX(\d)', r or b'')
+        return int(m.group(1)) if m else None
+
     def _yaesu_ascii_ptt_on(self):
-        """TX1; = émission (micro/CAT) sur le CAT ASCII Yaesu moderne."""
+        """TX1; = émission par le CAT (commande utilisée par Hamlib sur toutes les Yaesu récentes) ; l'état est relu."""
         self.serial_port.write(b'TX1;')
+        time.sleep(0.05)
+        st = self._yaesu_ascii_tx_state()
+        if st == 0:                                            # la radio a ignoré : une seconde tentative
+            self.serial_port.write(b'TX1;')
+            time.sleep(0.08)
+            st = self._yaesu_ascii_tx_state()
+        _f4lps_radio_log(f"Yaesu PTT ON : TX; -> {st}")
 
     def _yaesu_ascii_ptt_off(self):
-        """RX; = retour réception."""
-        self.serial_port.write(b'RX;')
+        """TX0; = retour en réception. ⚠️ « RX; » n'existe PAS chez Yaesu (elle répond « ?; ») : la radio restait en
+        émission. On relit l'état et on recommence jusqu'à 3 fois si la radio est encore en émission."""
+        st = None
+        for _ in range(3):
+            self.serial_port.write(b'TX0;')
+            time.sleep(0.05)
+            st = self._yaesu_ascii_tx_state()
+            if st in (None, 0):
+                break
+        _f4lps_radio_log(f"Yaesu PTT OFF : TX; -> {st}")
+        if st not in (None, 0):
+            _f4lps_radio_log("⚠️ Yaesu : la radio reste en émission après TX0; — coupe l'émission sur la radio")
+
+    # Modes Yaesu (commande « MD0x; ») : 1 LSB, 2 USB, 3 CW, 4 FM, 5 AM, 6 RTTY-L, 7 CW-R, 8 DATA-L, 9 RTTY-U,
+    # A DATA-FM, B FM-N, C DATA-USB, D AM-N, E C4FM.
+    _YAESU_MODES = {'1': 'LSB', '2': 'USB', '3': 'CW', '4': 'FM', '5': 'AM', '6': 'RTTY-L', '7': 'CW-R', '8': 'DATA-LSB',
+                    '9': 'RTTY-U', 'A': 'DATA-FM', 'B': 'FM-N', 'C': 'DATA-USB', 'D': 'AM-N', 'E': 'C4FM'}
+
+    def _yaesu_ascii_id(self):
+        """« ID0670; » -> 'ID0670' (identifiant de la radio) ou ''."""
+        with self._lock:
+            r = self._yaesu_ascii_query(b'ID;', 0.4)
+        m = re.match(rb'ID(\d{4});', r or b'')
+        return ('ID' + m.group(1).decode()) if m else ''
+
+    def _yaesu_ascii_mode_char(self):
+        """Caractère de mode lu par « MD0; » ('2' = USB…), '' si pas de réponse. L'appelant tient le verrou."""
+        r = self._yaesu_ascii_query(b'MD0;', 0.4)
+        m = re.match(rb'MD0([0-9A-E]);', r or b'')
+        return m.group(1).decode() if m else ''
+
+    def _yaesu_ascii_mode_name(self):
+        with self._lock:
+            ch = self._yaesu_ascii_mode_char()
+        return self._YAESU_MODES.get(ch, '')
+
+    def yaesu_set_mode(self, want):
+        """Change le mode d'une Yaesu récente et le VÉRIFIE par relecture. want='USB' -> DATA-USB (audio par le port USB de
+        la radio) ; want='CW' -> CW. Retourne True seulement si la radio confirme."""
+        ch = {'USB': 'C', 'CW': '3'}[want]
+        for _ in range(3):
+            with self._lock:
+                self.serial_port.write(f"MD0{ch};".encode('ascii'))
+                time.sleep(0.15)
+                cur = self._yaesu_ascii_mode_char()
+            if cur == ch:
+                _f4lps_radio_log(f"Yaesu : mode {want} confirmé (MD0{ch};)")
+                return True
+            time.sleep(0.2)
+        _f4lps_radio_log(f"Yaesu : mode {want} NON confirmé (MD0; -> {cur or '?'})")
+        return False
 
 
 
@@ -30259,8 +30420,14 @@ class RadioCatWindow(QDialog):
         for p in _lp.comports():
             dev = p.device
             try:
-                sp = _serial.Serial(port=dev, baudrate=baud, bytesize=8, parity='N',
-                                     stopbits=1, timeout=0.4, write_timeout=0.4)
+                sp = _serial.Serial()
+                sp.port, sp.baudrate, sp.bytesize, sp.parity = dev, baud, 8, 'N'
+                sp.stopbits = 1 if proto == 'icom' else 2
+                sp.timeout = sp.write_timeout = 0.4
+                if proto != 'icom':          # Yaesu : RTS est souvent le PTT — ne JAMAIS le lever pendant la recherche
+                    sp.dtr = False
+                    sp.rts = False
+                sp.open()
                 try:
                     sp.reset_input_buffer()
                     if proto == 'icom':
@@ -30340,6 +30507,12 @@ class RadioCatWindow(QDialog):
                 self._cat_status.setStyleSheet(
                     "color:#ffaa44;font-weight:bold;font-size:8pt;" if _warn else "color:#00ff66;font-weight:bold;font-size:8pt;")
                 self._btn_cat.setText("🔌 DÉCONNECTER")
+                try:                                        # Yaesu : la vitesse réellement trouvée remplace celle du menu
+                    _lb = getattr(rc, 'last_baud', None)
+                    if _lb and proto != 'icom' and self._cat_baud.findText(str(_lb)) >= 0:
+                        self._cat_baud.setCurrentText(str(_lb))
+                except Exception:
+                    pass
                 self.main._restart_freq_poll()
                 # V8.4.1 F4LPS : mémorise le port CAT qui vient de marcher.
                 try:
@@ -36934,11 +37107,7 @@ class PSKMainWindow(QMainWindow):
 
     def _radio_log(self, msg):
         """Journal ~/multidigi_radio.log : ce que MultiDigi a décidé pour le mode radio / le CW (à joindre à un rapport)."""
-        try:
-            with open(os.path.join(os.path.expanduser('~'), 'multidigi_radio.log'), 'a', encoding='utf-8') as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-        except Exception:
-            pass
+        _f4lps_radio_log(msg)
 
     def _opt(self, key, default):
         return bool((getattr(self, '_cat_settings', {}) or {}).get(key, default))
@@ -36953,6 +37122,8 @@ class PSKMainWindow(QMainWindow):
         if not self._opt('native_cw', True):
             return False, "CW par le manipulateur non activé"
         cs = dict(getattr(self, '_cat_settings', {}) or {})
+        if rc.connection_type == 'serial' and rc.protocol != 'icom':
+            return False, "le CW par le manipulateur de la radio n'existe qu'en CI-V (radio Icom) ; ici le CW part en audio"
         if rc.connection_type not in ('hrd', 'flrig', 'omnirig'):
             return False, "radio non connectée par HRD / FLRig / OmniRig / série Icom"
         if str(cs.get('protocol', 'icom')) != 'icom':
@@ -36999,6 +37170,16 @@ class PSKMainWindow(QMainWindow):
             res = bool(rc.civ_set_mode('CW' if want == 'CW' else 'USB', sp, civ))
             self._radio_log(f"CI-V : passage en {want} -> {'confirmé' if res else 'NON confirmé'}")
             return res
+        if rc.connection_type == 'serial' and rc.protocol == 'yaesu_ascii':      # Yaesu récent : MD0; lu puis vérifié
+            cur = str(rc.get_mode_name() or '').upper()
+            self._radio_log(f"Yaesu : mode lu = {cur or '?'} ; demandé = {want}")
+            if not cur:
+                return None
+            if want == 'CW':
+                return True if cur.startswith('CW') else bool(rc.yaesu_set_mode('CW'))
+            if cur in ('USB', 'LSB', 'DATA-USB', 'DATA-LSB'):
+                return True
+            return bool(rc.yaesu_set_mode('USB'))
         if rc.connection_type in ('omnirig', 'flrig'):        # lecture directe fiable : on peut vérifier
             cur = str(rc.get_mode_name() or '').upper()
             self._radio_log(f"{rc.connection_type} : mode lu = {cur or '?'} ; demandé = {want}")

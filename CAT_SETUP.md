@@ -97,7 +97,34 @@ automatiquement avec ce protocole (ils ne concernent que l'Icom).
 
 Réglages identiques dans l'esprit (CAT RATE côté radio, même baudrate
 côté MultiDigi), mais choisis le protocole **"Yaesu CAT (ancien,
-FT-847/857/897)"**.
+FT-847/857/897)"**. Ce protocole utilise **2 bits d'arrêt** et le PTT `08` (émission) / `88` (réception) des
+FT-847/857/897 ; le FT-100 utilise d'autres codes, non gérés.
+
+### Ce que MultiDigi fait (et vérifie) sur une Yaesu en CAT direct
+
+- **Port** : 8 bits, pas de parité, **2 bits d'arrêt** ; **DTR et RTS restent bas** (ils ne sont jamais levés à l'ouverture, ce
+  qui pouvait mettre la radio en émission dès CONNECTER si RTS est câblé sur le PTT). Sur un port « **Enhanced** », si la radio ne
+  répond pas avec RTS bas, il réessaie avec RTS levé (contrôle de flux CAT RTS) ; un port « **Standard** » n'est jamais levé.
+- **Vitesse** : il essaie ta vitesse puis 38400, 4800, 9600, 19200, 115200 (FT-891 / FT-991A : 4800 par défaut ; FTDX10 / 101 /
+  710 : 38400) et **reprend celle qui répond**. Le message indique la vitesse trouvée et le modèle (commande `ID;`).
+- **Émission (PTT)** : `TX1;` pour émettre, **`TX0;`** pour revenir en réception, puis relecture de l'état (`TX;`) ; si la radio
+  reste en émission, `TX0;` est renvoyé. (« `RX;` » n'existe pas chez Yaesu : les versions précédentes l'envoyaient et la radio
+  restait en émission.)
+- **Mode** : lu et changé par `MD0;` / `MD0x;`, **toujours relu pour vérifier**. Une radio en CW, AM, FM ou RTTY est ramenée en
+  **DATA-USB** pour les modes audio ; USB, LSB et DATA ne sont jamais modifiés. En CW, une Yaesu ignore l'audio (émission sans
+  morse) : le CW de MultiDigi part en **audio**, radio en USB/DATA-USB.
+- Tout est écrit dans `multidigi_radio.log` (dossier utilisateur) : à joindre à un rapport de problème.
+
+**Réglages de la radio à contrôler (les noms exacts varient selon le modèle) :**
+- **Port « Enhanced »** pour le CAT (le port « Standard » sert au PTT / à la manipulation par RTS / DTR).
+- **CAT RATE** = la vitesse trouvée par MultiDigi ; **CAT TOT** par défaut ; **CAT RTS** : Enable ou Disable, MultiDigi s'adapte.
+- **Pour émettre de l'audio** : mode DATA-USB (ou USB) et source audio USB dans la radio (« DATA IN SELECT / REAR », « USB
+  MOD/AUDIO » selon le modèle) ; niveau audio pour éviter les protections (ALC).
+- **PTT par CAT** : dans la radio, « DATA PTT SELECT » / « PTT SELECT » sur **CAT** (ou DAKY) et non RTS/DTR si tu veux que `TX1;`
+  fasse émettre.
+
+**Avec HRD (ou OmniRig, FLRig) :** le PTT est celui du logiciel. MultiDigi ne peut pas changer le mode de façon vérifiable
+(HRD ignore souvent la commande) : mets la radio en **USB / DATA-USB** avant d'émettre. Une radio restée en CW émet sans morse.
 
 ### Comment savoir lequel choisir si tu doutes ?
 

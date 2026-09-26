@@ -72,6 +72,29 @@ V1.9 (dossier `C:\Users\14frs\Documents\radio\CW_Terminal_Dev`, dépôt public `
   release GitHub `f4lps/multidigi` avec l'installateur (gh CLI absent : passer par l'API avec le jeton de `git credential fill`).
 - CW Terminal 1.9.2 : code commité (f3a39a9) mais installateur NON construit (arrêté sur demande, priorité MultiDigi).
 
+### 🔧 Audit du protocole Yaesu (26 septembre 2026) — corrigé dans le code, NON compilé, NON publié
+Signalé : « personne n'arrive à se connecter correctement, surtout pour l'envoi, en CAT ou par HRD ». Sources : Hamlib
+(`newcat.c`, `ft991.c`, `ft891.c`, `ftdx10.c`) et le code de CW Terminal (`YaesuModernCAT`, validé sur un FTDX10).
+- **`RX;` n'existe pas chez Yaesu** : `_yaesu_ascii_ptt_off` l'envoyait, la radio répondait `?;` et **restait en émission**.
+  Maintenant `TX0;` + relecture `TX;` (3 essais) ; `TX1;` + relecture.
+- **pyserial lève DTR et RTS à l'ouverture par défaut** (`_rts_state = _dtr_state = True`) : la 8.4.7 n'avait supprimé que le
+  forçage explicite, la radio pouvait donc partir en émission dès CONNECTER (RTS = PTT sur port « Standard » / câbles CAT+PTT).
+  Yaesu : ouverture avec DTR/RTS bas (`Serial()` + `dtr/rts=False` + `open()`), y compris dans « Auto-détecter le port ».
+  ⚠️ **Icom : inchangé** (DTR/RTS toujours levés à l'ouverture) — même risque potentiel avec une interface Icom dont RTS est le PTT.
+- **2 bits d'arrêt** pour les deux protocoles Yaesu (Hamlib : FT-891/991/FTDX10 = 2 ; CW Terminal aussi) ; MultiDigi mettait 1.
+- **Vitesse** : recherche 38400/4800/9600/19200/115200 (`_yaesu_connect_finish`), reprise dans le panneau ; identification `ID;`.
+  Port « Enhanced » : nouvel essai RTS levé ; port « Standard » : jamais levé.
+- **Ancien protocole binaire** : PTT `0x0F` remplacé par `0x08` / `0x88` (FT-847/857/897 ; FT-100 non géré).
+- **Modes Yaesu** (`MD0;` / `MD0x;`, relecture) : `get_mode_name`, `yaesu_set_mode`, branche Yaesu dans `_set_radio_mode`
+  (CW/AM/FM/RTTY -> DATA-USB ; USB/LSB/DATA laissés). Le CW reste en audio (pas de CW natif Yaesu : `KY` possible plus tard).
+- `ptt_on` / `ptt_off` ne tuent plus les erreurs en silence : tout va dans `multidigi_radio.log` (`_f4lps_radio_log`).
+- Test : `CW_Terminal_Dev/test_md_yaesu.py` (fausse radio EN MÉMOIRE, aucun port COM : COM16/17 sont pris par les logiciels de
+  l'utilisateur) ; ATTENTION `test_md_native.py`, `test_md_cwmode.py`, `test_md_connect.py` exigent COM16/17 LIBRES : les relancer
+  quand les ports sont libres (ils avaient passé avant ce changement).
+- **À corriger aussi dans CW Terminal** (publié en 1.9.2, non modifié) : `YaesuModernCAT.set_mode_cw` envoie `MD7;` et
+  `set_mode_usb` `MD2;` — la syntaxe Yaesu est `MD0x;` (x = 3 CW, 7 CW-R, 2 USB, C DATA-USB) ; `MD7;` n'est pas un CW-U valide.
+- Non testé sur une vraie radio Yaesu. Reste à faire : version (8.5.4), compilation, essai chez un OM Yaesu, puis publication.
+
 ### 🧩 Plantage du Tracker chez un OM (Windows 11, AMD x64, installateur) — à suivre
 - Symptôme : le programme se ferme au démarrage du Tracker (carte OSM = QtWebEngine/Chromium). Plantage natif, non
   interceptable en Python ; cause probable = pilote GPU de son PC. Le paquet est bon (QtWebEngineProcess.exe, icudtl.dat et
