@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.6"
+PROGRAM_VERSION_TAG = "8.5.7"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -53,7 +53,8 @@ if sys.stderr is None:
 import os
 import csv
 import urllib.parse, urllib.request, webbrowser
-from datetime import datetime
+import shutil, tempfile, subprocess          # V8.5.7 : utilisés par l'envoi LoTW et les sauvegardes du Tracker, jamais importés
+from datetime import datetime, timezone      # V8.5.7 : timezone (recherche d'indicatif, saisie manuelle d'un QSO dans le Tracker)
 from collections import deque
 import xmlrpc.client as _xmlrpc_client
 import xml.etree.ElementTree as ET  # MULTIDIGI: requis par le Grid Tracker intégré
@@ -26929,7 +26930,7 @@ class QSOLogDialog(QDialog):
             else:
                 self.lotw_status.setText("⚠️ TQSL a renvoyé une erreur — voir console")
                 self.lotw_status.setStyleSheet("color:#ffaa44; font-size:9pt;")
-            print("[LOG LoTW CMD]", " ".join(cmd))
+            print("[LOG LoTW CMD]", " ".join('***' if (password and a == password) else a for a in cmd))   # V8.5.7 : mot de passe masqué
             print("[LOG LoTW OUT]", output[:1200])
         except Exception as e:
             self.lotw_status.setText(f"❌ Erreur LoTW : {e}")
