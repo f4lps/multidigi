@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.4"
+PROGRAM_VERSION_TAG = "8.5.5"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -28159,15 +28159,86 @@ class _HRDRigControlClient:
         return self.set_button(btn, False) if btn else False
 
 
-def _rc_connect_hrd(self, host='127.0.0.1', port=7809):
+def _f4lps_hrd_listening_ports():
+    """V8.5.5 F4LPS — [(port, processus)] : ports TCP en écoute des processus HRD (Rig Control) puis Win4Icom. Le port du serveur IP
+    de HRD n'est pas le même selon la version (7809 en 6.8, autre en 6.9) : on le lit sur le processus au lieu de le deviner."""
+    if os.name != 'nt':
+        return []
     try:
-        client = _HRDRigControlClient(host, int(port))
+        import csv as _csv
+        import io as _io
+        import subprocess as _sp
+
+        def _run(cmd):
+            return _sp.run(cmd, capture_output=True, text=True, encoding='cp850', errors='replace', timeout=8,
+                           creationflags=0x08000000).stdout          # 0x08000000 = pas de fenêtre console
+        names = {}
+        for row in _csv.reader(_io.StringIO(_run(['tasklist', '/FO', 'CSV', '/NH']))):
+            if len(row) >= 2:
+                try:
+                    names[int(row[1])] = row[0]
+                except Exception:
+                    pass
+        found = []
+        for line in _run(['netstat', '-ano', '-p', 'TCP']).splitlines():
+            m = re.match(r'\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)', line)
+            if not m or m.group(1) not in ('127.0.0.1', '0.0.0.0'):
+                continue
+            name = names.get(int(m.group(3)), '')
+            low = name.lower()
+            if any(k in low for k in ('hrdlogbook', 'hrdremote', 'hrdlog', 'dm780', 'hrdsatellite')):
+                continue                                              # autres programmes HRD (journal, serveur distant)
+            rank = 0 if ('hamradiodeluxe' in low or low in ('hrd.exe', 'hrdrigcontrol.exe')) else (1 if 'win4icom' in low else -1)
+            if rank >= 0:
+                found.append((rank, int(m.group(2)), name))
+        found.sort()
+        seen, out = set(), []
+        for _r, port, name in found:
+            if port not in seen:
+                seen.add(port)
+                out.append((port, name))
+        return out
+    except Exception:
+        return []
+
+
+def _rc_connect_hrd(self, host='127.0.0.1', port=7809):
+    """Connexion au serveur IP de HRD. Si le port demandé ne répond pas (HRD 6.9 n'utilise pas 7809), cherche le bon : ports en écoute du
+    processus HRD, puis ports usuels. Le port réellement utilisé est dans self.last_hrd_port."""
+    try:
+        port = int(port)
+        client = _HRDRigControlClient(host, port)
         freq = client.get_frequency_hz()
+        listening = []
         if freq is None:
-            return False, f'HRD IP Server non accessible sur {host}:{int(port)}'
+            try:
+                listening = _f4lps_hrd_listening_ports()
+            except Exception:
+                listening = []
+            cands = [p for p, _n in listening] + [7809, 7810, 7811, 7812, 7813, 7814, 7815, 7820]
+            seen = {port}
+            for p in cands:
+                if p in seen:
+                    continue
+                seen.add(p)
+                c = _HRDRigControlClient(host, p)
+                f = c.get_frequency_hz()
+                if f is not None:
+                    client, freq = c, f
+                    _f4lps_radio_log(f"HRD : le port {port} ne répond pas, serveur IP trouvé sur {p}")
+                    port = p
+                    break
+        if freq is None:
+            if listening:
+                who = ', '.join(f'{n} : {p}' for p, n in listening)
+                return False, (f'HRD écoute ({who}) mais ne répond pas : la radio est-elle connectée dans HRD ? '
+                               f'(port essayé : {int(port)})')
+            return False, (f'HRD IP Server non accessible sur {host}:{int(port)} : HRD est-il lancé, avec le serveur IP activé '
+                           f'(HRD 6.8 : port 7809 ; HRD 6.9 : port différent, détecté automatiquement) ?')
         self.disconnect()
         self._hrd_client = client
         self.connection_type = 'hrd'
+        self.last_hrd_port = int(port)
         return True, f'HRD connecté ({host}:{int(port)}) — {int(freq)/1e6:.4f} MHz'
     except Exception as e:
         return False, f'Erreur HRD: {e}'
@@ -30368,6 +30439,7 @@ class RadioCatWindow(QDialog):
         g2l.addWidget(self._hrd_host, 0,1)
         g2l.addWidget(self._lbl("Port :"),1,0)
         self._hrd_port = self._ed(str(_cs.get('hrd_port', '7809')))
+        self._hrd_port.setToolTip("HRD 6.8 : 7809. HRD 6.9 : le port change, MultiDigi le détecte tout seul si ce port ne répond pas.")
         g2l.addWidget(self._hrd_port, 1,1)
         self._btn_hrd = QPushButton("🔗 Connecter HRD")
         self._btn_hrd.setStyleSheet(self._btn_cat.styleSheet())
@@ -30653,6 +30725,8 @@ class RadioCatWindow(QDialog):
             except: port = 7809
             ok, msg = rc.connect_hrd(host, port)
             if ok:
+                port = int(getattr(rc, 'last_hrd_port', 0) or port)          # V8.5.5 : port détecté (HRD 6.9)
+                self._hrd_port.setText(str(port))
                 self._hrd_status.setText(f"✅ {msg}")
                 self._hrd_status.setStyleSheet("color:#00ff66;font-size:8pt;")
                 self._btn_hrd.setText("🔌 Déconnecter HRD")
@@ -40439,6 +40513,10 @@ class PSKMainWindow(QMainWindow):
             port = 7809
         ok, msg = self.radio_ctrl.connect_hrd(host, port)
         if ok:
+            try:                                                              # V8.5.5 : port détecté (HRD 6.9)
+                self.hrd_cat_port.setText(str(int(getattr(self.radio_ctrl, 'last_hrd_port', 0) or port)))
+            except Exception:
+                pass
             self.hrd_cat_status.setText(f"✅ {msg}")
             self.hrd_cat_status.setStyleSheet("color:#00ff66;font-size:8pt;")
             self.btn_hrd_cat.setText("🔌 Déconnecter HRD")
