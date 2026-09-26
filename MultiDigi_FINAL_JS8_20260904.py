@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.5"
+PROGRAM_VERSION_TAG = "8.5.6"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -27486,7 +27486,13 @@ class RadioController:
                 self.rig.Tx = 1; return
             if self.connection_type == 'hrd':
                 c = getattr(self,'_hrd_client',None)
-                if c: c.ptt_on(); return
+                if c:
+                    ok = bool(c.ptt_on())
+                    if not ok:
+                        time.sleep(0.15)
+                        ok = bool(c.ptt_on())
+                    _f4lps_radio_log(f"HRD PTT ON via le bouton « {c._tx_button_name} » : {'OK' if ok else 'ÉCHEC (HRD refuse ou bouton introuvable : boutons ' + str(c.get_buttons()) + ')'}")
+                    return
             if self.connection_type == 'flrig':
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(1,)); return
             with self._lock:
@@ -27509,7 +27515,13 @@ class RadioController:
                 self.rig.Tx = 0; return
             if self.connection_type == 'hrd':
                 c = getattr(self,'_hrd_client',None)
-                if c: c.ptt_off(); return
+                if c:
+                    ok = bool(c.ptt_off())
+                    if not ok:                                   # ne jamais laisser la radio en émission : nouvelle tentative
+                        time.sleep(0.15)
+                        ok = bool(c.ptt_off())
+                    _f4lps_radio_log(f"HRD PTT OFF via le bouton « {c._tx_button_name} » : {'OK' if ok else 'ÉCHEC — vérifie que la radio est repassée en réception'}")
+                    return
             if self.connection_type == 'flrig':
                 self._flrig_call('rig.set_ptt','main.set_ptt',args=(0,)); return
             with self._lock:
@@ -28134,18 +28146,45 @@ class _HRDRigControlClient:
     def get_buttons(self):
         if self._buttons_cache is None:
             resp = self._send('get buttons') or ''
-            self._buttons_cache = [b.strip() for b in resp.split(',') if b.strip()]
+            self._buttons_cache = [b.strip() for b in re.split(r'[,;\r\n]+', resp) if b.strip()]
         return list(self._buttons_cache)
 
+    _NOT_PTT = ('clar', 'moni', 'pwr', 'power', 'level', 'delay', 'inhib', 'swap', 'lock', 'tune', 'atu', 'vox', 'break')
+
     def _find_ptt_button(self):
+        """Bouton d'émission de HRD : nom exact d'abord (TX, PTT, MOX, Transmit), puis nom qui COMMENCE par tx / ptt en écartant les
+        boutons voisins (TX Clarifier, TX Monitor…), en dernier recours le premier nom contenant tx / ptt. Le nom varie selon la radio."""
         if self._tx_button_name:
             return self._tx_button_name
-        for name in self.get_buttons():
+        names = self.get_buttons()
+        for want in ('tx', 'ptt', 'mox', 'transmit'):
+            for name in names:
+                if name.lower() == want:
+                    self._tx_button_name = name
+                    return name
+        for name in names:
             low = name.lower()
-            if low in ('tx', 'ptt', 'mox', 'transmit') or 'tx' in low or 'ptt' in low:
+            if low.startswith(('tx', 'ptt', 'mox', 'transmit')) and not any(k in low for k in self._NOT_PTT):
+                self._tx_button_name = name
+                return name
+        for name in names:                       # dernier recours : contient tx / ptt, mais jamais un bouton voisin (TX Clarifier…)
+            low = name.lower()
+            if ('tx' in low or 'ptt' in low) and not any(k in low for k in self._NOT_PTT):
                 self._tx_button_name = name
                 return name
         return None
+
+    def describe(self):
+        """Ce que HRD annonce (radio, version, boutons, mode) et le bouton PTT retenu : pour le journal de diagnostic."""
+        info = {}
+        for key, cmd in (('id', 'get id'), ('version', 'get version'), ('radio', 'get radio'), ('mode', 'get mode')):
+            try:
+                info[key] = self._send(cmd)
+            except Exception:
+                info[key] = None
+        info['buttons'] = self.get_buttons()
+        info['ptt_button'] = self._find_ptt_button()
+        return info
 
     def set_button(self, name, checked=True):
         return self.send_simple_command(f'set button-select {name} {"1" if checked else "0"}')
@@ -28239,6 +28278,10 @@ def _rc_connect_hrd(self, host='127.0.0.1', port=7809):
         self._hrd_client = client
         self.connection_type = 'hrd'
         self.last_hrd_port = int(port)
+        try:                                                     # V8.5.6 : ce que HRD annonce, pour le journal de diagnostic
+            _f4lps_radio_log(f"HRD connecté {host}:{int(port)} — {client.describe()}")
+        except Exception:
+            pass
         return True, f'HRD connecté ({host}:{int(port)}) — {int(freq)/1e6:.4f} MHz'
     except Exception as e:
         return False, f'Erreur HRD: {e}'
