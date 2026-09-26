@@ -81,6 +81,13 @@ explicite (« ok on publie ») ; ne rien toucher d'autre que ce qui est demandé
 temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle ici) ; vérifier le SHA256 du fichier téléchargé après publication.
 
 ## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
+- MultiDigi **v8.5.7 publiée le 26/09** (`main` = `a561104`, SHA256 `692d9d77…9cab` vérifié) : Yaesu + HRD comme CW Terminal — `_set_radio_mode`
+  lit « get mode » et passe en DATA-U / DATAU / DATA U / DATA-USB / PKT-U / USB avec relecture ; `_open_civ_aux` refuse le CI-V si HRD annonce une Yaesu.
+  Imports manquants ajoutés (shutil, tempfile, subprocess, timezone) : LoTW réparé (mot de passe masqué en console), noms des stations du Tracker
+  (CentralCallbookThread perdait le nom), saisie manuelle QSO Tracker, sauvegardes Tracker. Tests : `test_md_hrd_yaesu_mode.py`, `test_md_imports.py`.
+  Rapports « Yaesu + HRD ne marche pas » = OM avec des versions ≤ 8.5.5 (l'utilisateur n'a PAS de Yaesu ; son journal = IC-7300). Cause probable : bouton
+  PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
+  NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
 - CW Terminal : **v1.9.5 publiée le 26/09** (commits `6695d3d`, `0b17589`, `d80c516` ; SHA256 `ae59db6b…3022` vérifié) : clic droit sur ▲/▼ SCAN =
   seuil SNR / rebouclage / auto-LOCK (plage, pas, pause retirés : sans effet, pas 10 Hz et pause 60 ms figés dans `_start_scan`) ; bouton « 🔧 Test DTR »
