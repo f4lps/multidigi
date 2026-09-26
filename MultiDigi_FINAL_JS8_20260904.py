@@ -37624,6 +37624,9 @@ class PSKMainWindow(QMainWindow):
             return False, "radio non connectée par HRD / FLRig / OmniRig / série Icom"
         if str(cs.get('protocol', 'icom')) != 'icom':
             return False, "le CW par la radio n'existe qu'en CI-V (radio Icom) : le protocole RADIO CAT n'est pas Icom"
+        # V8.5.7 : HRD annonce une Yaesu -> jamais de trames CI-V (Icom) sur un port de la radio, même si le protocole est resté « Icom »
+        if rc.connection_type == 'hrd' and RadioController.name_is_yaesu(rc.hrd_radio_name()):
+            return False, "radio Yaesu (annoncée par HRD) : pas de liaison CI-V"
         port = cs.get('civ_port') or cs.get('port')
         if not port:
             return False, ("aucun port CI-V enregistré : dans RADIO CAT → « Mode radio et CW », clique « Chercher / tester » "
@@ -37676,6 +37679,30 @@ class PSKMainWindow(QMainWindow):
             if cur in ('USB', 'LSB', 'DATA-USB', 'DATA-LSB'):
                 return True
             return bool(rc.yaesu_set_mode('USB'))
+        if rc.connection_type == 'hrd' and RadioController.name_is_yaesu(rc.hrd_radio_name()):
+            # V8.5.7 : Yaesu par HRD, comme CW Terminal — « get mode » lu, puis « set mode » DATA-U / DATAU / DATA U / USB (le nom
+            # du mode varie selon la radio dans HRD), et on RELIT le mode pour vérifier. Pas de passage forcé en CW (CW Terminal non plus) :
+            # en CW, MultiDigi manipule par DTR si la radio est déjà en CW, sinon le CW part en audio.
+            cur = str(rc.get_mode_name() or '').upper()
+            self._radio_log(f"HRD Yaesu : mode lu = {cur or '?'} ; demandé = {want}")
+            if not cur:
+                return None
+            if want == 'CW':
+                return True if cur.startswith('CW') else None
+            audio = ('USB', 'LSB', 'DATA', 'PKT', 'DIG', 'PSK')
+            if cur.startswith(audio):
+                return True
+            c = getattr(rc, '_hrd_client', None)
+            for m in ('DATA-U', 'DATAU', 'DATA U', 'DATA-USB', 'PKT-U', 'USB'):
+                if not (c and c.send_simple_command(f'set mode {m}')):
+                    continue
+                time.sleep(0.3)
+                now = str(rc.get_mode_name() or '').upper()
+                if now.startswith(audio):
+                    self._radio_log(f"HRD Yaesu : « set mode {m} » -> mode {now} confirmé")
+                    return True
+            self._radio_log(f"HRD Yaesu : passage en mode audio NON confirmé (mode {str(rc.get_mode_name() or '?').upper()})")
+            return False
         if rc.connection_type in ('omnirig', 'flrig'):        # lecture directe fiable : on peut vérifier
             cur = str(rc.get_mode_name() or '').upper()
             self._radio_log(f"{rc.connection_type} : mode lu = {cur or '?'} ; demandé = {want}")
