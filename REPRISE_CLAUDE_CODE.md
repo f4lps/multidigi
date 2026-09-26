@@ -110,7 +110,8 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
 - ~~Relancer TOUTE la batterie~~ FAIT le 26/09 (tout passe). Pour mémoire, la batterie (dans `CW_Terminal_Dev`, `PYTHONIOENCODING=utf-8`) : `test_md_yaesu_hrd.py test_md_hrdptt.py test_md_hrdport.py test_md_js8.py test_md_yaesu.py
   test_md_native.py test_md_cwmode.py test_md_connect.py test_md_cwfit.py test_md_tracker.py` (les trois derniers de la ligne 2 + native/cwmode/connect exigent COM16/COM17
   LIBRES — l'utilisateur a libéré COM16 ; si occupés : `_f4lps_port_holders`).
-- **Recompiler** l'installateur 8.5.6 (`installer\Output\MultiDigi_Setup_8.5.6.exe` actuel = ANCIEN, sans le CW Yaesu DTR ni les correctifs de stabilité) :
+- ~~Recompiler~~ FAIT le 26/09 à 17:58 depuis le commit `03ee3c2` : `installer\Output\MultiDigi_Setup_8.5.6.exe` (138,8 Mo, SHA256 `27AA5805408179E6987CA4B03F7106CCC41ECD82DD36C5707F55B1A846013D48`),
+  exe testé (démarre, fenêtre V8.5.6, aucune erreur). RESTE : publier SUR ACCORD. Pour mémoire, la procédure : recompiler l'installateur 8.5.6 :
   `Remove-Item -Recurse -Force build, dist` puis `& 'C:\Program Files\Python311\python.exe' -m PyInstaller --name MultiDigi --onedir --windowed --noconfirm --icon installer\multidigi.ico
   --exclude-module tensorflow ... (liste dans le script du 26/09, cf. section « Outillage installeur » plus bas)  MultiDigi_FINAL_JS8_20260904.py` puis
   `& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\MultiDigi.iss` (~5-10 min ; le PowerShell bloque `Remove-Item` avec « Program Files » dans la même commande :
