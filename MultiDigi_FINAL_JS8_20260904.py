@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.7"
+PROGRAM_VERSION_TAG = "8.5.8"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -11395,8 +11395,28 @@ class CWFitDecoder:
 
 class CWFitBackend:
     """Expose CWFitDecoder avec l'API attendue par _CWModemAdapter (celle des décodeurs CWSkimmer).
-    Seuls les attributs et méthodes réellement utilisés par l'adaptateur sont fournis."""
+    Seuls les attributs et méthodes réellement utilisés par l'adaptateur sont fournis.
+
+    V8.5.8 F4LPS — comme CW Terminal, deux étages autour du moteur (identique à celui de CW Terminal) :
+    (1) suivi fin de la fréquence : le décodeur se cale sur le pic du signal, ±TRACK_SPAN Hz autour du clic,
+        avec le même garde-fou que CW Terminal (pas de saut pendant une copie sans demande continue ~1,5 s) ;
+    (2) texte assemblé mot par mot : jamais deux espaces de suite, lettres isolées du bruit (E T I M N) et mots de
+        2 lettres douteux retirés, comme la zone de texte de CW Terminal (_display_char_direct)."""
     engine_name = 'CW FIT'
+
+    TRACK = True
+    TRACK_SPAN = 40.0         # Hz autour du clic : jamais plus loin (pas de saut sur une autre station)
+    TRACK_FFT = 16384         # ~0,35 s d'audio, résolution ~2,8 Hz (+ interpolation), comme CW Terminal
+    TRACK_EVERY_S = 0.25      # une mesure toutes les 0,25 s d'audio
+    TRACK_MIN_SNR = 3.5       # pic / médiane du spectre (même seuil que _detect_peaks de CW Terminal)
+    TRACK_VOTES = 4           # mesures valides et concordantes (sur les 6 dernières, ~1,5 s) avant de bouger
+    TRACK_SPREAD = 12.0       # Hz : écart maximal entre ces mesures
+    TRACK_STEP = 8.0          # Hz : déplacement maximal par mesure (glissement doux, l'enveloppe reste valable)
+    WORDS = True
+    NOISE_SINGLES = frozenset('ETIMN')
+    CW_SHORTS = frozenset({'TU', 'DE', 'ES', 'AR', 'SK', 'CQ', 'BK', 'KN', 'NR', 'OM', 'YL', 'DX',
+                           'HI', 'FB', 'NW', 'UR', 'OK', 'RR', '73', '88', 'ID'})
+    WORD_FLUSH_S = 2.5        # mot en attente sans nouveau caractère depuis ce temps : on l'écrit quand même
 
     def __init__(self, sample_rate):
         self.sample_rate = int(sample_rate)
@@ -11410,25 +11430,127 @@ class CWFitBackend:
         self.v3_snr_db = 0.0
         self.cw_filter_bw_hz = 60.0
         self.v3_quality_gate_enabled = False
+        self._ref_hz = 700.0                           # fréquence choisie par l'opérateur (clic)
+        self._trk_buf = np.zeros(self.TRACK_FFT, dtype=np.float64)
+        self._trk_pos = 0
+        self._trk_fill = 0
+        self._trk_next = 0
+        self._trk_votes = deque(maxlen=6)
+        self._word = ''
+        self._recent = deque(maxlen=3)
+        self._idle = 0                                 # échantillons depuis le dernier caractère reçu
 
     def set_base_pitch(self, hz):
         hz = float(hz)
         if abs(hz - self._core.freq_hz) > 25.0:      # signal déplacé : l'ancienne enveloppe n'a plus de sens
             self._core.reset()
+            self._word = ''
         self._core.freq_hz = hz
         self.base_pitch = self.detected_pitch = hz
+        self._ref_hz = hz
+        self._trk_votes.clear()
 
     def soft_set_base_pitch(self, hz):
         """Alignement automatique sans réinitialiser la lettre en cours."""
         self._core.freq_hz = float(hz)
         self.base_pitch = self.detected_pitch = float(hz)
+        self._ref_hz = float(hz)
+        self._trk_votes.clear()
 
     def update_bandpass_filter(self):
         pass                                          # le filtre est intégré (2 pôles, ~45 Hz)
 
+    def _track_measure(self):
+        """Fréquence du pic le plus fort à ±TRACK_SPAN Hz du clic, ou None (pas de signal net)."""
+        n, sr = self.TRACK_FFT, float(self.sample_rate)
+        data = np.concatenate([self._trk_buf[self._trk_pos:], self._trk_buf[:self._trk_pos]])
+        spec = np.abs(np.fft.rfft(data * np.blackman(n)))
+        df = sr / n
+        lo, hi = int(max(1, (self._ref_hz - 300.0) / df)), int(min(len(spec) - 2, (self._ref_hz + 300.0) / df))
+        a, b = int((self._ref_hz - self.TRACK_SPAN) / df), int((self._ref_hz + self.TRACK_SPAN) / df) + 1
+        a, b = max(a, lo), min(b, hi)
+        if b - a < 3:
+            return None
+        noise = max(float(np.median(spec[lo:hi])), 1e-12)
+        i = a + int(np.argmax(spec[a:b]))
+        if spec[i] / noise < self.TRACK_MIN_SNR:
+            return None
+        d = 2.0 * spec[i] - spec[i - 1] - spec[i + 1]
+        frac = 0.5 * (spec[i - 1] - spec[i + 1]) / d if d > 0 else 0.0
+        hz = (i + frac) * df
+        return hz if abs(hz - self._ref_hz) <= self.TRACK_SPAN else None
+
+    def _track(self, x):
+        n = len(x)
+        if n >= self.TRACK_FFT:
+            self._trk_buf[:] = x[-self.TRACK_FFT:]
+            self._trk_pos = 0
+        else:
+            end = self._trk_pos + n
+            if end <= self.TRACK_FFT:
+                self._trk_buf[self._trk_pos:end] = x
+            else:
+                k = self.TRACK_FFT - self._trk_pos
+                self._trk_buf[self._trk_pos:] = x[:k]
+                self._trk_buf[:n - k] = x[k:]
+            self._trk_pos = end % self.TRACK_FFT
+        self._trk_fill += n
+        if self._trk_fill < self.TRACK_FFT or self._trk_fill < self._trk_next:
+            return
+        self._trk_next = self._trk_fill + int(self.TRACK_EVERY_S * self.sample_rate)
+        self._trk_votes.append(self._track_measure())
+        good = [h for h in self._trk_votes if h is not None][-self.TRACK_VOTES:]
+        if len(good) < self.TRACK_VOTES or max(good) - min(good) > self.TRACK_SPREAD:
+            return
+        target = float(np.median(good))
+        c = self._core
+        if abs(target - c.freq_hz) <= 3.0:
+            return
+        # glissement par pas de TRACK_STEP Hz (sans remise à zéro) : un saut de 30 Hz d'un coup, avec reset, perdait un mot
+        c.freq_hz += float(np.clip(target - c.freq_hz, -self.TRACK_STEP, self.TRACK_STEP))
+        self.detected_pitch = c.freq_hz
+
+    def _words(self, chars, quality):
+        """Assemble les caractères en mots et applique les filtres de la zone texte de CW Terminal."""
+        out = []
+
+        def flush():
+            w, self._word = self._word, ''
+            if not w or all(ch == '?' for ch in w):
+                return
+            if len(w) == 1 and w.upper() in self.NOISE_SINGLES:
+                if not any(len(r) > 2 for r in self._recent) or quality < 0.45:
+                    return                              # lettre de bruit
+            if len(w) == 2 and quality < 0.35 and w.upper() not in self.CW_SHORTS:
+                return
+            self._recent.append(w)
+            out.append(w + ' ')
+
+        for ch in chars:
+            if ch == ' ':
+                flush()
+            elif ch == '?' and not self._word:
+                continue                                # ? isolé : ignoré
+            else:
+                self._word += ch
+        if chars:
+            self._idle = 0
+        elif self._word and self._idle > self.WORD_FLUSH_S * self.sample_rate:
+            flush()
+        return out
+
     def process_audio(self, chunk):
         c = self._core
-        chars = c.process(np.asarray(chunk, dtype=np.float64))
+        x = np.asarray(chunk, dtype=np.float64)
+        if self.TRACK:
+            try:
+                self._track(x)
+            except Exception as e:
+                print(f"CW FIT suivi de fréquence : {e}")
+        chars = c.process(x)
+        self._idle += len(x)
+        if self.WORDS:
+            chars = self._words(chars, float(c.confidence))
         if c.wpm > 0:
             self.wpm = int(round(c.wpm))
             self.dit_duration = 1.2 / max(c.wpm, 1.0)
