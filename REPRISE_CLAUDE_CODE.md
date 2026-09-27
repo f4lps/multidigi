@@ -89,7 +89,12 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
   NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- CW Terminal : **v1.9.5 publiée le 26/09** (commits `6695d3d`, `0b17589`, `d80c516` ; SHA256 `ae59db6b…3022` vérifié) : clic droit sur ▲/▼ SCAN =
+- CW Terminal : **v1.9.6 publiée le 27/09** (commits `cf124cd` + `d7da693`, SHA256 `ded59508…d63d` vérifié) : libellés du panneau Tracking
+  (Détecté / Offset / LOCKED) en QSizePolicy.Ignored — une valeur longue élargissait le panneau de gauche et faisait bouger la fenêtre (trouvé par
+  l'utilisateur ; largeur minimale du groupe 470 -> 1280 px avant, 147 fixe après). Test exe : 1er lancement lent (seul l'écran d'accueil à 45 s),
+  2e fermé sans fenêtre et sans erreur Windows, puis 4 lancements OK en 16-17 s (antivirus probable, non prouvé). Panneau de gauche gonflé
+  (~954 px au lieu de 22 %) par la liste des périphériques audio (minHint 1273 px) : non touché, proposé.
+- CW Terminal : v1.9.5 publiée le 26/09 (commits `6695d3d`, `0b17589`, `d80c516` ; SHA256 `ae59db6b…3022` vérifié) : clic droit sur ▲/▼ SCAN =
   seuil SNR / rebouclage / auto-LOCK (plage, pas, pause retirés : sans effet, pas 10 Hz et pause 60 ms figés dans `_start_scan`) ; bouton « 🔧 Test DTR »
   dans Réglages connexion (DTR toujours redescendu, refusé pendant une émission) ; signal `_status_msg_sig` pour les messages depuis un thread
   (QTimer.singleShot depuis un thread Python ne part JAMAIS) ; fin TX continu Icom sans singleShot. Réglages du scan non mémorisés entre deux lancements.
