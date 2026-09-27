@@ -89,7 +89,18 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
   NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- CW Terminal : **v1.9.6 publiée le 27/09** (commits `cf124cd` + `d7da693`, SHA256 `ded59508…d63d` vérifié) : libellés du panneau Tracking
+- CW Terminal : **v1.9.7 publiée le 27/09** (commits `ad3ff36` … `d8afb0b` + spec ; SHA256 `c671dc4d…43df` vérifié ; installateur 268 Mo, démarrage ~24 s dont
+  ~16 s de décompression onefile) : (1) listes audio/micro compactes (`_compact_combo`) ; (2) `cw_callbook.py` = recherche d'indicatif comme MultiDigi
+  (Tracker UDP -> QRZ XML -> HamQTH -> HamDB -> Callook -> publics), remplit Name/Prénom sans écraser, cache `callbook_cache.json`, identifiants dans ⚙ Réglages ;
+  (3) `cw_tracker.py` = copie GÉNÉRÉE du Tracker MultiDigi 8.5.7 (régénérer si le Tracker MD change), bouton « 📍 Tracker » : si UDP 2237 déjà écouté
+  (MultiDigi) -> envoi des paquets, sinon ouverture de la copie ; spot par indicatif trouvé, QSO à l'envoi vers un logbook ; QtWebEngine importé avant
+  QApplication + rendu logiciel ; (4) multi-décodeur : ancre = canal ★ seulement (mesuré avec `bench_canaux.py` : canaux 2-5 n'amélioraient jamais le texte,
+  injectaient du texte parasite, x2 CPU), canaux 2-5 seulement si panneau affiché, bouton ★ réellement actif ; (5) journal de démarrage
+  `%APPDATA%\CWTerminal\cw_terminal_start.log` (étapes, exceptions, faulthandler — note aussi les exceptions COM rattrapées, ex. 0x8001010d).
+  À SURVEILLER : 2 fois, le PREMIER lancement d'un exe neuf s'est fermé sans fenêtre ni erreur Windows (1.9.6 et 1.9.7 1re compilation) ; non reproduit
+  avec le journal. Si un OM le signale : demander `cw_terminal_start.log` (absent = arrêt avant Python, dans le lanceur onefile).
+  ⚠ `_settings_path` écrit d'abord dans le dossier du script : les tests doivent faire `sys.argv = [chemin temporaire]` (fait dans les tests récents).
+- CW Terminal : v1.9.6 publiée le 27/09 (commits `cf124cd` + `d7da693`, SHA256 `ded59508…d63d` vérifié) : libellés du panneau Tracking
   (Détecté / Offset / LOCKED) en QSizePolicy.Ignored — une valeur longue élargissait le panneau de gauche et faisait bouger la fenêtre (trouvé par
   l'utilisateur ; largeur minimale du groupe 470 -> 1280 px avant, 147 fixe après). Test exe : 1er lancement lent (seul l'écran d'accueil à 45 s),
   2e fermé sans fenêtre et sans erreur Windows, puis 4 lancements OK en 16-17 s (antivirus probable, non prouvé). Panneau de gauche gonflé
