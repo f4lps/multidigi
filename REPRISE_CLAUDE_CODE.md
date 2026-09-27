@@ -89,7 +89,13 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
   NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- CW Terminal : **v1.9.7 publiée le 27/09** (commits `ad3ff36` … `d8afb0b` + spec ; SHA256 `c671dc4d…43df` vérifié ; installateur 268 Mo, démarrage ~24 s dont
+- CW Terminal : **v1.9.8 publiée le 27/09** (commit `3ee9505`, SHA256 `faa4d4e5…eb71` vérifié, installateur 177 Mo) = 1.9.7 en **mode DOSSIER**
+  (PyInstaller --onedir, .iss : `dist\CW_Terminal\*` recursesubdirs). Cause : en --onefile l'exe décompressait ~600 Mo dans %TEMP%\_MEI… à chaque démarrage ;
+  chez l'utilisateur, l'installation 1.9.7 a affiché « Failed to load Python DLL …\_MEI146362\python311.dll ». Démarrage 8 s (au lieu de 24). La release
+  v1.9.7 ET son tag ont été SUPPRIMÉS sur accord (2 téléchargements). 7,7 Go de dossiers _MEI laissés par les tests (exes tués) supprimés de %TEMP%.
+  « Fermé sans fenêtre » en test = souvent le verrou une-seule-copie (journal : « une autre copie est déjà ouverte ») : vérifier qu'aucun CW Terminal 1.9.x
+  ne tourne avant de tester. Les exceptions COM 0x8001010d du journal viennent des tests par UI Automation (rattrapées, sans effet).
+- CW Terminal : v1.9.7 (retirée) publiée le 27/09 (commits `ad3ff36` … `d8afb0b` + spec ; SHA256 `c671dc4d…43df` vérifié ; installateur 268 Mo, démarrage ~24 s dont
   ~16 s de décompression onefile) : (1) listes audio/micro compactes (`_compact_combo`) ; (2) `cw_callbook.py` = recherche d'indicatif comme MultiDigi
   (Tracker UDP -> QRZ XML -> HamQTH -> HamDB -> Callook -> publics), remplit Name/Prénom sans écraser, cache `callbook_cache.json`, identifiants dans ⚙ Réglages ;
   (3) `cw_tracker.py` = copie GÉNÉRÉE du Tracker MultiDigi 8.5.7 (régénérer si le Tracker MD change), bouton « 📍 Tracker » : si UDP 2237 déjà écouté
