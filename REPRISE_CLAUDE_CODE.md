@@ -80,6 +80,21 @@ source `cw_terminal.py` + `cw_fit_decoder.py`). Tests dans `CW_Terminal_Dev\test
 explicite (« ok on publie ») ; ne rien toucher d'autre que ce qui est demandé ; toujours tester (faux ports / fausse radio / faux serveur HRD, dossier utilisateur
 temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle ici) ; vérifier le SHA256 du fichier téléchargé après publication.
 
+## ▶▶ MultiDigi 8.5.8 — CODE COMMITÉ (`66ed9d3`, branche cw-fit-et-connexions), NON COMPILÉ, NON PUBLIÉ (27/09 soir)
+Demande : « le décodage CW de MultiDigi décode moins bien que CW Terminal, surtout les espaces ». CONSTAT MESURÉ : le moteur `CWFitDecoder`
+est IDENTIQUE à `cw_fit_decoder.py` (diff ligne à ligne) ; même son + même fréquence -> même texte brut. Différences = autour du moteur :
+(1) CW Terminal affiche mot par mot (`_display_char_direct` : pas 2 espaces, E/T/I/M/N isolés écartés si pas de vrai mot récent ou qualité < 0.45,
+mots de 2 lettres écartés si qualité < 0.35 sauf abréviations) ; MultiDigi affichait le flux brut (doubles espaces, lettres de bruit).
+(2) CW Terminal suit le pic (ancre = trait rouge) ; MultiDigi restait sur le clic (RX-CENTER = PSK seulement).
+FAIT dans `CWFitBackend` (FIT seulement ; CLASSIC/NEXT/autres modes inchangés) : `_words` (mêmes filtres, mot en attente écrit après 2,5 s)
++ `_track` (FFT 16384, pic à ±40 Hz du clic `_ref_hz`, 4 mesures concordantes à 12 Hz près, glissement par pas de 8 Hz SANS reset — un saut
+avec reset perdait un mot). Mesures : vrai enregistrement contest SM5X (`diag/audio_20260920_060850.wav`) doubles espaces 7-10 -> 0,
+lettres isolées 9-15 -> 4-5, texte identique clic juste / +30 Hz ; synthétique CER 2,9 -> 2,0 %, WER 11,9 -> 9,7 %.
+Manipulation à la main : le seuil de mot (WORD_RATIO 1.40-1.65) ne change RIEN ; erreurs à jitter 18 % même sans bruit (lettre/intra-lettre
+confondus), 0 erreur à 10 %. NE PAS retoucher le moteur sans un VRAI enregistrement où MultiDigi colle les mots (demandé à l'utilisateur).
+Tests : `test_md_cwfit.py` sections 6-7 + batterie complète (12 tests) TOUT PASSE. Bancs : `bench_md_espaces.py`, `bench_md_fit2.py`,
+`bench_md_mots.py` (CW_Terminal_Dev, commit `9297463`). Notes : `RELEASE_NOTES_8.5.8.md`. À FAIRE : compiler, tester, publier SUR ACCORD.
+
 ## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
 - MultiDigi **v8.5.7 publiée le 26/09** (`main` = `a561104`, SHA256 `692d9d77…9cab` vérifié) : Yaesu + HRD comme CW Terminal — `_set_radio_mode`
   lit « get mode » et passe en DATA-U / DATAU / DATA U / DATA-USB / PKT-U / USB avec relecture ; `_open_civ_aux` refuse le CI-V si HRD annonce une Yaesu.
