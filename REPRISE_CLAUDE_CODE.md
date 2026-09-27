@@ -95,11 +95,11 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   clés qrz_xml_user/qrz_xml_pass, hamqth_user/hamqth_pass) si CW Terminal n'en a pas — l'utilisateur CONFIRME que les prénoms marchent ; ⚙ Réglages :
   « Sortie de la voix » (SAPI.SpVoice AudioOutput par nom, réglage `tts_output`, `_tts_sapi_output_command`, `_tts_list_outputs`) + « 🔊 Tester la voix »
   (résultat + sortie dans `cw_terminal_start.log`) ; délai PowerShell 15 s. Tous les tests passent, fichiers réels inchangés.
-  Exe testé par l'utilisateur à 18:20 (test de la voix OK). RESTE : supprimer la release v1.9.9 + son tag (3 téléchargements) — confirmation demandée.
+  Exe testé par l'utilisateur à 18:20 (test de la voix OK). v1.9.9 : l'utilisateur a finalement décidé de la GARDER (« non laisse la ») — ne pas la supprimer.
   VOIX — CAUSE TROUVÉE ET CORRIGÉE : dans le mélangeur de volume Windows, la session « powershell » était à 0 % sur le G733 (sortie par défaut).
   La voix de CW Terminal passe par PowerShell (SAPI), donc muette malgré « phrase dite ». Mis à 100 % (non coupé) sur accord, via Core Audio
   (ISimpleAudioVolume pendant qu'un PowerShell parle) ; persistant vérifié ; l'utilisateur ENTEND. Si un OM signale « voix muette » : mélangeur -> PowerShell.
-- CW Terminal : **v1.9.9 publiée le 27/09** (à retirer après publication de la 1.9.10) (commits `87e749b` + `33e6172`, SHA256 `edde8c8e…d0f4` vérifié) : TTS (option Réglages -> case
+- CW Terminal : **v1.9.9 publiée le 27/09** (conservée, décision du 27/09) (commits `87e749b` + `33e6172`, SHA256 `edde8c8e…d0f4` vérifié) : TTS (option Réglages -> case
   « 🔊 Lecture », mémorisée `tts_decode`, RST chiffre par chiffre, plus de double conversion cw_to_speech) ; panneau QSO : un seul champ Prénom
   (`qso_name_edit`, l'ancien `qso_firstname_edit` masqué) + `qso_loc_edit` / `qso_country_edit` ; pas de spot Tracker si l'indicatif est inconnu.
   TESTS : tous isolés (%APPDATA%, profil, `CWT_TRACKER_PORT`) — avant, ils écrivaient dans le vrai journal CI-V (« CQ TEST ») et ont envoyé 3 faux
