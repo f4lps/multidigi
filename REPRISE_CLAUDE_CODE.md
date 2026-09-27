@@ -89,6 +89,13 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
   NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
+- CW Terminal : **v1.9.9 publiée le 27/09** (commits `87e749b` + `33e6172`, SHA256 `edde8c8e…d0f4` vérifié) : TTS (option Réglages -> case
+  « 🔊 Lecture », mémorisée `tts_decode`, RST chiffre par chiffre, plus de double conversion cw_to_speech) ; panneau QSO : un seul champ Prénom
+  (`qso_name_edit`, l'ancien `qso_firstname_edit` masqué) + `qso_loc_edit` / `qso_country_edit` ; pas de spot Tracker si l'indicatif est inconnu.
+  TESTS : tous isolés (%APPDATA%, profil, `CWT_TRACKER_PORT`) — avant, ils écrivaient dans le vrai journal CI-V (« CQ TEST ») et ont envoyé 3 faux
+  spots (DL1ABC, G4XYZ, ZZ9ZZZ) au vrai Tracker de l'utilisateur ; il s'occupe lui-même de les retirer. Envoi « saccadé » = radio en BK-IN FULL
+  (réglé par l'utilisateur en semi). L'utilisateur est en HRD (le fichier de réglages disait « flrig », valeur périmée).
+  Bloc « FLRig PRO PATCH » placé APRÈS `main()` (ligne ~20690) : jamais exécuté depuis la V1.8, laissé tel quel.
 - CW Terminal : **v1.9.8 publiée le 27/09** (commit `3ee9505`, SHA256 `faa4d4e5…eb71` vérifié, installateur 177 Mo) = 1.9.7 en **mode DOSSIER**
   (PyInstaller --onedir, .iss : `dist\CW_Terminal\*` recursesubdirs). Cause : en --onefile l'exe décompressait ~600 Mo dans %TEMP%\_MEI… à chaque démarrage ;
   chez l'utilisateur, l'installation 1.9.7 a affiché « Failed to load Python DLL …\_MEI146362\python311.dll ». Démarrage 8 s (au lieu de 24). La release
