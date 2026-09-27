@@ -80,7 +80,7 @@ source `cw_terminal.py` + `cw_fit_decoder.py`). Tests dans `CW_Terminal_Dev\test
 explicite (« ok on publie ») ; ne rien toucher d'autre que ce qui est demandé ; toujours tester (faux ports / fausse radio / faux serveur HRD, dossier utilisateur
 temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle ici) ; vérifier le SHA256 du fichier téléchargé après publication.
 
-## ▶▶ MultiDigi 8.5.8 — CODE COMMITÉ (`66ed9d3`, branche cw-fit-et-connexions), NON COMPILÉ, NON PUBLIÉ (27/09 soir)
+## ▶▶ MultiDigi 8.5.8 — CODE COMMITÉ (`66ed9d3`, branche cw-fit-et-connexions), COMPILÉ le 27/09 à 19:27 (`installer\Output\MultiDigi_Setup_8.5.8.exe`, 145 519 209 octets, SHA256 `6C396512…9BEF`, exe testé : fenêtre V8.5.8, aucune erreur), NON PUBLIÉ
 Demande : « le décodage CW de MultiDigi décode moins bien que CW Terminal, surtout les espaces ». CONSTAT MESURÉ : le moteur `CWFitDecoder`
 est IDENTIQUE à `cw_fit_decoder.py` (diff ligne à ligne) ; même son + même fréquence -> même texte brut. Différences = autour du moteur :
 (1) CW Terminal affiche mot par mot (`_display_char_direct` : pas 2 espaces, E/T/I/M/N isolés écartés si pas de vrai mot récent ou qualité < 0.45,
@@ -93,7 +93,7 @@ lettres isolées 9-15 -> 4-5, texte identique clic juste / +30 Hz ; synthétique
 Manipulation à la main : le seuil de mot (WORD_RATIO 1.40-1.65) ne change RIEN ; erreurs à jitter 18 % même sans bruit (lettre/intra-lettre
 confondus), 0 erreur à 10 %. NE PAS retoucher le moteur sans un VRAI enregistrement où MultiDigi colle les mots (demandé à l'utilisateur).
 Tests : `test_md_cwfit.py` sections 6-7 + batterie complète (12 tests) TOUT PASSE. Bancs : `bench_md_espaces.py`, `bench_md_fit2.py`,
-`bench_md_mots.py` (CW_Terminal_Dev, commit `9297463`). Notes : `RELEASE_NOTES_8.5.8.md`. À FAIRE : compiler, tester, publier SUR ACCORD.
+`bench_md_mots.py` (CW_Terminal_Dev, commit `9297463`). Notes : `RELEASE_NOTES_8.5.8.md`. À FAIRE : essai par l'utilisateur, puis publier SUR ACCORD.
 
 ## Publié (GitHub `f4lps/multidigi` et `f4lps/CW-Terminal`)
 - MultiDigi **v8.5.7 publiée le 26/09** (`main` = `a561104`, SHA256 `692d9d77…9cab` vérifié) : Yaesu + HRD comme CW Terminal — `_set_radio_mode`
