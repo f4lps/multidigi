@@ -89,18 +89,16 @@ temporaire) et dire honnêtement ce qui n'est PAS testé (pas de radio réelle i
   PTT = premier contenant « tx » (8.5.5) + CW en audio + mode jamais réglé par HRD. Attendre leur `multidigi_radio.log` (8.5.6+).
   NON corrigés (décodeur, risque) : noms non définis `levenshtein_distance` (fix_qcode), `powers` (_decode_js8_payload_v25), `snapshot_epoch`, `JS8LDPCEncoder`.
 - MultiDigi : dernière release **v8.5.5** (port HRD détecté ; inclut 8.5.4 Yaesu CAT/JS8 SNR/log auto, 8.5.3 Tracker, 8.5.2, 8.5.1, 8.5.0).
-- ▶▶ CW Terminal **1.9.10 COMPILÉE, NON PUBLIÉE** (27/09 soir, commits `ec39991` + `794fe3b`, installateur `installer\Output\CW_Terminal_Setup_1.9.10.exe`,
+- ▶▶ CW Terminal **v1.9.10 PUBLIÉE le 27/09 à ~18:30** sur accord (release id 397721386, « latest », SHA256 `3727ea85…4b258` du fichier téléchargé = identique ; (27/09 soir, commits `ec39991` + `794fe3b`, installateur `installer\Output\CW_Terminal_Setup_1.9.10.exe`,
   recompilé à 17:03 — SHA256 à recalculer, l'ancien `5EA06D28…` était la 1re compilation sans le choix de carte son). Contenu : double-clic sur un
   indicatif (texte décodé + colonnes multi) -> champ De: + recherche ; identifiants QRZ/HamQTH repris du Tracker (`grid_tracker_f4lps_settings.json`,
   clés qrz_xml_user/qrz_xml_pass, hamqth_user/hamqth_pass) si CW Terminal n'en a pas — l'utilisateur CONFIRME que les prénoms marchent ; ⚙ Réglages :
   « Sortie de la voix » (SAPI.SpVoice AudioOutput par nom, réglage `tts_output`, `_tts_sapi_output_command`, `_tts_list_outputs`) + « 🔊 Tester la voix »
   (résultat + sortie dans `cw_terminal_start.log`) ; délai PowerShell 15 s. Tous les tests passent, fichiers réels inchangés.
-  À FAIRE : (1) test exe habituel (FERMER d'abord tout CW Terminal 1.9.x — l'utilisateur lançait `dist\CW_Terminal\CW_Terminal.exe` lui-même) ;
-  (2) publier SUR ACCORD ; (3) PUIS supprimer la release v1.9.9 + son tag (l'utilisateur l'a demandé : « on effacera la v1.9.9 »).
-  VOIX : non entendue par l'utilisateur. Le journal prouve que Windows a parlé SANS erreur à 17:09 sur « Haut-parleurs (G733 Gaming Headset) »
-  (sortie par défaut ; casque sans fil probablement éteint, dongle branché). Conseillé : choisir « Haut-parleurs (Realtek(R) Audio) » dans
-  « Sortie de la voix » puis Tester ; sinon mélangeur de volume Windows (PowerShell coupé ?). Sorties vues : G733, Realtek, Line 2 et Line 1 (VAC,
-  à éviter : vers la radio). Réponse de l'utilisateur en attente.
+  Exe testé par l'utilisateur à 18:20 (test de la voix OK). RESTE : supprimer la release v1.9.9 + son tag (3 téléchargements) — confirmation demandée.
+  VOIX — CAUSE TROUVÉE ET CORRIGÉE : dans le mélangeur de volume Windows, la session « powershell » était à 0 % sur le G733 (sortie par défaut).
+  La voix de CW Terminal passe par PowerShell (SAPI), donc muette malgré « phrase dite ». Mis à 100 % (non coupé) sur accord, via Core Audio
+  (ISimpleAudioVolume pendant qu'un PowerShell parle) ; persistant vérifié ; l'utilisateur ENTEND. Si un OM signale « voix muette » : mélangeur -> PowerShell.
 - CW Terminal : **v1.9.9 publiée le 27/09** (à retirer après publication de la 1.9.10) (commits `87e749b` + `33e6172`, SHA256 `edde8c8e…d0f4` vérifié) : TTS (option Réglages -> case
   « 🔊 Lecture », mémorisée `tts_decode`, RST chiffre par chiffre, plus de double conversion cw_to_speech) ; panneau QSO : un seul champ Prénom
   (`qso_name_edit`, l'ancien `qso_firstname_edit` masqué) + `qso_loc_edit` / `qso_country_edit` ; pas de spot Tracker si l'indicatif est inconnu.
