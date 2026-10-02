@@ -1,5 +1,16 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 2 octobre 2026 (après-midi) — CW Terminal 1.9.12 PUBLIÉE (sur accord)
+- Release id 401881394 « latest », `CW_Terminal_Setup_1.9.12.exe` 185 833 253 octets, SHA256 `76517570…4552` identique
+  (compilé depuis `783606b` dans `dist_1912`, l'utilisateur avait `dist` ouvert). Exe testé : fenêtre V1.9.12.
+- Lecture vocale : `cw_abbr_to_french` (46 codes Q, 445 abréviations) utilisé par `_word_to_tts_french` (avant : ~30 mots).
+- Waterfall : `MultiDecoderThread` -> `wf_rows` (une ligne par bloc de 512, fenêtre Hann adaptée au WPM, 1024…4096),
+  `_wf_reassigned_row` = réallocation spectrale (trace ~17 Hz à l'écran au lieu de ~80), `WaterfallWidget` réécrit (Indexed8,
+  palette MultiDigi, repères triangle + ligne transparente). Comparaison visuelle demandée d'après une capture Remote CW Keyer.
+- File audio du multi-décodeur 4 -> 32 blocs : 0 bloc perdu au lieu de 5 à 67 sur 11 s (compteur `blocks_dropped`).
+- Inquiétude « on décode moins » : `bench_versions.py` (rejeu temps réel, vraie fenêtre) -> 1.9.12 décode PLUS (62 vs 29 car.
+  sur cw_live ; 3 vs 0-1 « TEST SM5X » sur 90 s). L'utilisateur confirme ensuite que ça marche bien.
+
 ## ▶▶ 2 octobre 2026 — MultiDigi 8.5.9 et CW Terminal 1.9.11 PUBLIÉES (sur accord)
 - MultiDigi **v8.5.9** : `main` = `78cc490` poussé (fast-forward depuis `cw-fit-et-connexions`), release id 401662614 « latest »,
   `MultiDigi_Setup_8.5.9.exe` 145 509 163 octets, SHA256 `e4f725ef…9a33` du fichier téléchargé = identique. Notes = 8.5.9 + rappel 8.5.8
