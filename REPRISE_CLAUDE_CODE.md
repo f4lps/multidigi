@@ -1,5 +1,14 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 2 octobre 2026 — MultiDigi 8.5.9 et CW Terminal 1.9.11 PUBLIÉES (sur accord)
+- MultiDigi **v8.5.9** : `main` = `78cc490` poussé (fast-forward depuis `cw-fit-et-connexions`), release id 401662614 « latest »,
+  `MultiDigi_Setup_8.5.9.exe` 145 509 163 octets, SHA256 `e4f725ef…9a33` du fichier téléchargé = identique. Notes = 8.5.9 + rappel 8.5.8
+  (jamais publiée seule). Exe testé : fenêtre V8.5.9. Correctif avant publication : débit audio — seule la CW lève une erreur, les autres modes ignorent.
+- CW Terminal **v1.9.11** (commit `6975f04`) : bouton « 🔍 Lookup » (panneau QSO + barre d'état) -> https://www.qrz.com/db/<indicatif de base>
+  (texte surligné sinon champ De:). Release id 401664535 « latest », 185 827 139 octets, SHA256 `df6cb79b…6e5e` identique. Exe testé (lancement normal).
+  ⚠️ Lancer l'exe avec une console héritée (UseShellExecute=false) plante sur le `print("✅ …")` ligne 138 (cp1252) : artefact de test, pas un bug utilisateur.
+- Publication : script `publish.py` (API GitHub, jeton de `git credential fill`, `gh` absent).
+
 ## ⏩ Session du 20 septembre 2026 — moteur CW « FIT » + diagnostics de connexion (version 8.5.0, NON publiée)
 
 **Où :** branche locale `cw-fit-et-connexions` (créée depuis `main` = 8.4.7 ; **rien n'est fusionné dans `main`,
