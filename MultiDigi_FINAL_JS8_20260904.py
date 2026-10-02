@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.8"
+PROGRAM_VERSION_TAG = "8.5.9"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -11430,6 +11430,7 @@ class CWFitBackend:
         self.v3_snr_db = 0.0
         self.cw_filter_bw_hz = 60.0
         self.v3_quality_gate_enabled = False
+        self.auto_align_enabled = True
         self._ref_hz = 700.0                           # fréquence choisie par l'opérateur (clic)
         self._trk_buf = np.zeros(self.TRACK_FFT, dtype=np.float64)
         self._trk_pos = 0
@@ -11542,7 +11543,7 @@ class CWFitBackend:
     def process_audio(self, chunk):
         c = self._core
         x = np.asarray(chunk, dtype=np.float64)
-        if self.TRACK:
+        if self.TRACK and self.auto_align_enabled:
             try:
                 self._track(x)
             except Exception as e:
@@ -11555,11 +11556,13 @@ class CWFitBackend:
             self.wpm = int(round(c.wpm))
             self.dit_duration = 1.2 / max(c.wpm, 1.0)
         self.calibrated = bool(c.wpm > 0 and c.confidence > 0.2)
+        self.pitch_locked = self.calibrated
+        self.detected_pitch = c.freq_hz
         try:
             self.v3_snr_db = float(min(60.0, max(0.0, 20.0 * math.log10(max(c.snr, 1.0)))))
         except Exception:
             pass
-        return (chars, float(c.env_last), self.base_pitch, 0.0)
+        return (chars, float(c.env_last), self.detected_pitch, 0.0)
 
 
 
@@ -11762,6 +11765,15 @@ class _CWModemAdapter:
             self._d.soft_set_base_pitch(float(hz))
         except Exception:
             pass
+
+    def set_sample_rate(self, sample_rate):
+        sample_rate = int(sample_rate)
+        if sample_rate == self._d.sample_rate:
+            self.sample_rate = sample_rate
+            return
+        self._d.sample_rate = sample_rate
+        self.sample_rate = sample_rate
+        self.reset()
 
     def set_mode(self, mode):
         self.mode = mode
@@ -24103,7 +24115,9 @@ class PSKAudioThread(QThread):
                 default_sr = requested_sr
             # JS8 : acquisition PortAudio indépendante du DSP/waterfall.
             # Les lectures bloquantes mêlées au DSP perdaient des blocs VAC.
-            capture_queue = queue.Queue(maxsize=256) if isinstance(self.decoder, JS8RXAdapter) else None
+            cw_capture = isinstance(self.decoder, _CWModemAdapter)
+            capture_queue = queue.Queue(maxsize=256 if not cw_capture else 32) if (
+                isinstance(self.decoder, JS8RXAdapter) or cw_capture) else None
             callback_rate = requested_sr
             capture_gap_pending = False
             def capture_callback(data, frame_count, timing, status):
@@ -24169,10 +24183,14 @@ class PSKAudioThread(QThread):
                 # sample_rate cohérent ; chaque décodeur gère son propre
                 # ré-échantillonnage en interne (ex: Olivia rééchantillonne
                 # vers 8 kHz quel que soit le sample_rate d'entrée).
-                try:
-                    self.decoder.sample_rate = self.sample_rate
-                except Exception:
-                    pass
+                if isinstance(self.decoder, _CWModemAdapter):
+                    # CW : un moteur resté à l'ancien débit décoderait faux -> on préfère l'erreur.
+                    self.decoder.set_sample_rate(self.sample_rate)
+                else:
+                    try:
+                        self.decoder.sample_rate = self.sample_rate
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"❌ PSK Audio: {e}")
             p.terminate(); self.running = False; return
@@ -24201,7 +24219,12 @@ class PSKAudioThread(QThread):
                     self.decoder._audio_capture_queue_depth = capture_queue.qsize()
                     self.decoder._audio_discontinuity = bool(discontinuity)
                     if discontinuity:
-                        print('JS8 AUDIO GAP: tampon de trame réinitialisé')
+                        if cw_capture:
+                            # Ne jamais assembler une lettre à travers un trou audio.
+                            self.decoder.reset()
+                            print('CW AUDIO GAP: acquisition CW réinitialisée')
+                        else:
+                            print('JS8 AUDIO GAP: tampon de trame réinitialisé')
                 samples = np.frombuffer(raw, dtype=np.float32).copy()
                 if not len(samples): continue
                 now = time.time()
@@ -30386,6 +30409,13 @@ class CWWaterfallWindow(QDialog):
     def update_diagnostics(self, decoder):
         try:
             d = getattr(decoder, '_d', decoder)
+            if isinstance(d, CWFitBackend):
+                c = d._core
+                self.pitch_lbl.setText(f"Pitch : {d.detected_pitch:.0f} Hz")
+                self.lock_lbl.setText("FIT : acquis" if d.calibrated else "FIT : acquisition")
+                self.wpm_lbl.setText(f"Vitesse : {c.wpm:.1f} WPM" if d.calibrated else "Vitesse : --")
+                self.level_lbl.setText(f"Confiance Fit : {100*c.confidence:.0f}% / contraste : {c.snr:.1f}")
+                return
             pitch = float(getattr(d, 'detected_pitch', getattr(d,'base_pitch',510.0)) or 510.0)
             self.pitch_lbl.setText(f"Pitch : {pitch:.0f} Hz")
             self.lock_lbl.setText("LOCK : OUI" if bool(getattr(d,'pitch_locked',False)) else "LOCK : NON")
@@ -35619,9 +35649,19 @@ class PSKMainWindow(QMainWindow):
         # Copie d'affichage uniquement pour la fenêtre CW dédiée.
         try:
             if getattr(self, '_family', '') == "CW" and getattr(self, 'cw_waterfall_window', None) is not None:
-                self.cw_waterfall_window.waterfall.update_data(mag, sr)
                 dec = self.audio_thread.decoder if self.audio_thread is not None else self.decoder_obj
-                self.cw_waterfall_window.update_diagnostics(dec)
+                backend = getattr(dec, '_d', dec)
+                win = self.cw_waterfall_window
+                if isinstance(backend, CWFitBackend):
+                    # Le moteur suit le signal sur l'audio brut. Le spectre d'affichage
+                    # ne doit ni déplacer son ancre ni effacer ses votes de suivi.
+                    backend.auto_align_enabled = win.auto_align_cb.isChecked()
+                    win.waterfall.auto_align_enabled = False
+                    win.waterfall.set_afc_freq(backend.detected_pitch)
+                else:
+                    win.waterfall.auto_align_enabled = win.auto_align_cb.isChecked()
+                win.waterfall.update_data(mag, sr)
+                win.update_diagnostics(dec)
         except Exception:
             pass
         self._update_rx_quality_indicator()
@@ -39638,6 +39678,9 @@ class PSKMainWindow(QMainWindow):
         try:
             if getattr(self, '_family', '') != "CW":
                 return
+            dec = self.audio_thread.decoder if self.audio_thread is not None else self.decoder_obj
+            if isinstance(getattr(dec, '_d', dec), CWFitBackend):
+                return  # Le moteur Fit possède déjà son propre AFC.
             hz = max(50.0, min(2950.0, float(hz)))
             self._cw_afc_hz = hz
 

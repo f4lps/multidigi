@@ -27,3 +27,8 @@ Output/
 # Cache local du dictionnaire JSC JS8Call (téléchargé automatiquement au
 # premier lancement, régénérable, pas du code source).
 JS8_JSC_MAP_V303.json.gz
+
+# Comparaisons CW locales et compilation de validation
+cw_comparison/
+build-cw-*/
+dist-cw-*/
