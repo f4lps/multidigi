@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.10"
+PROGRAM_VERSION_TAG = "8.5.11"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -31753,8 +31753,13 @@ class PSKMainWindow(QMainWindow):
         self.js8_band_table.setHorizontalHeaderLabels(
             ["Offset", "Age", "SNR", "Message(s)"]
         )
-        self.js8_band_table.setMinimumHeight(180)
-        self.js8_band_table.setMaximumHeight(230)
+        # V8.5.11 : plus de hauteur maximale (le séparateur décide) et lignes compactes : ~2× plus de messages
+        self.js8_band_table.setMinimumHeight(100)
+        self.js8_band_table.verticalHeader().setDefaultSectionSize(18)
+        self.js8_band_table.verticalHeader().setMinimumSectionSize(16)
+        self.js8_band_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.js8_band_table.verticalHeader().setStyleSheet('QHeaderView::section{padding:0px;border:0px;}')   # sinon 21 px minimum
+        self.js8_band_table.setWordWrap(False)
         self.js8_band_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.js8_band_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.js8_band_table.verticalHeader().setVisible(False)
@@ -31765,6 +31770,7 @@ class PSKMainWindow(QMainWindow):
             "QHeaderView::section{background:#d9eef6;color:#101010;"
             "border:1px solid #b8d4df;padding:3px;font-weight:bold;}"
             "QTableWidget::item:selected{background:#2b6e8c;color:white;}"
+            "QTableWidget::item{padding:0px 3px;}"
         )
         hdr = self.js8_band_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -31784,8 +31790,12 @@ class PSKMainWindow(QMainWindow):
         self.js8_calls_table.setHorizontalHeaderLabels(
             ["Callsign", "Age", "SNR", "Offset", "Name", "Comment"]
         )
-        self.js8_calls_table.setMinimumHeight(180)
-        self.js8_calls_table.setMaximumHeight(230)
+        self.js8_calls_table.setMinimumHeight(100)
+        self.js8_calls_table.verticalHeader().setDefaultSectionSize(18)
+        self.js8_calls_table.verticalHeader().setMinimumSectionSize(16)
+        self.js8_calls_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.js8_calls_table.verticalHeader().setStyleSheet('QHeaderView::section{padding:0px;border:0px;}')   # sinon 21 px minimum
+        self.js8_calls_table.setWordWrap(False)
         self.js8_calls_table.setMinimumWidth(430)
         self.js8_calls_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.js8_calls_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -31797,6 +31807,7 @@ class PSKMainWindow(QMainWindow):
             "QHeaderView::section{background:#eef6f9;color:#111;"
             "border:1px solid #c3d5dd;padding:3px;font-weight:bold;}"
             "QTableWidget::item:selected{background:#66a7c4;color:white;}"
+            "QTableWidget::item{padding:0px 3px;}"
         )
         ch = self.js8_calls_table.horizontalHeader()
         for _c in range(4):
@@ -31812,7 +31823,7 @@ class PSKMainWindow(QMainWindow):
         self.js8_calls_table.cellDoubleClicked.connect(self._on_js8_calls_row_double_clicked)
         js8_act_lay.addWidget(self.js8_calls_table, 2)
 
-        wf_lay.addWidget(self.js8_activity_panel)
+        wf_lay.addWidget(self.js8_activity_panel, 1)          # V8.5.11 : la place gagnée va aux tableaux JS8
         self._js8_calls_activity = {}
 
         # Commandes JS8Call-like. Elles préparent une trame dans la zone TX ;
@@ -31864,7 +31875,13 @@ class PSKMainWindow(QMainWindow):
         self.waterfall.setMinimumHeight(155)
         self.waterfall.setMaximumHeight(210)
         wf_lay.addWidget(self.waterfall)
-        left_col_lay.addWidget(wf_grp, 1)
+        # V8.5.11 : séparateur déplaçable entre le haut (waterfall, Band Activity JS8) et la réception
+        self.left_split = QSplitter(Qt.Vertical)
+        self.left_split.setChildrenCollapsible(False)
+        self.left_split.setHandleWidth(7)
+        self.left_split.setStyleSheet("QSplitter::handle:vertical{background:#2a5668;margin:1px 40px;border-radius:3px;}")
+        self.left_split.addWidget(wf_grp)
+        left_col_lay.addWidget(self.left_split, 1)
 
         rx_grp = QGroupBox("📥 RÉCEPTION PSK / TRADUCTION RX")
         # V1.6.37 : bloc RX vraiment fermé et dimensionné comme Olivia.
@@ -32103,7 +32120,7 @@ class PSKMainWindow(QMainWindow):
             pass
         # V1.6.44 : plus de hauteur fixe énorme. La zone RX doit rester
         # entièrement visible et s'adapter au splitter vertical.
-        self.rx_text.setMinimumHeight(185)
+        self.rx_text.setMinimumHeight(60)     # V8.5.11 : le panneau réception peut être réduit (séparateur)
         self.rx_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.rx_text.setFont(QFont("Courier New", 12, QFont.Bold))
         self.rx_text.setStyleSheet("QTextEdit{background:#04020a;color:#ddccdd;border:1px solid #660044;border-bottom:2px solid #ff00aa;font-family:'Courier New';padding:6px;}")
@@ -32115,7 +32132,7 @@ class PSKMainWindow(QMainWindow):
         mid_rx = QWidget(); mid_lay = QVBoxLayout(mid_rx)
         mid_lay.setContentsMargins(0,0,0,0); mid_lay.setSpacing(0)
         self.rx_translated_view = QTextEdit(); self.rx_translated_view.setReadOnly(True)
-        self.rx_translated_view.setMinimumHeight(185)
+        self.rx_translated_view.setMinimumHeight(60)   # V8.5.11
         self.rx_translated_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.rx_translated_view.setFont(QFont("Courier New", 12, QFont.Bold))
         self.rx_translated_view.setStyleSheet("QTextEdit{background:#04020a;color:#88ddff;border:1px solid #660044;border-bottom:2px solid #00aaff;font-family:'Courier New';padding:6px;}")
@@ -32127,7 +32144,7 @@ class PSKMainWindow(QMainWindow):
         right_rx = QWidget(); right_lay = QVBoxLayout(right_rx)
         right_lay.setContentsMargins(0,0,0,0); right_lay.setSpacing(0)
         self.rx_translate_text = QTextEdit(); self.rx_translate_text.setReadOnly(False)
-        self.rx_translate_text.setMinimumHeight(185)
+        self.rx_translate_text.setMinimumHeight(60)   # V8.5.11
         self.rx_translate_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.rx_translate_text.setFont(QFont("Courier New", 12, QFont.Bold))
         self.rx_translate_text.setStyleSheet("QTextEdit{background:#04020a;color:#ffaacc;border:1px solid #660044;border-bottom:2px solid #ff00aa;font-family:'Courier New';padding:6px;}")
@@ -32144,15 +32161,18 @@ class PSKMainWindow(QMainWindow):
         rx_split.setStretchFactor(2, 1)
         rx_split.setSizes([620, 0, 620])
         self._rx_split = rx_split
-        rx_split.setMinimumHeight(190)
+        rx_split.setMinimumHeight(60)   # V8.5.11 : réductible avec le séparateur
         rx_split.setChildrenCollapsible(False)
         rx_lay.addWidget(rx_split, 1)
         # Hauteur minimale suffisante pour lire, mais pas assez grande
         # pour pousser les onglets sur la réception.
-        rx_grp.setMinimumHeight(250)
+        rx_grp.setMinimumHeight(110)          # V8.5.11 : réductible avec le séparateur (avant : 250 minimum)
         rx_grp.setMaximumHeight(330)
         rx_grp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_col_lay.addWidget(rx_grp, 3)
+        self.left_split.addWidget(rx_grp)
+        self.left_split.setStretchFactor(0, 1)
+        self.left_split.setStretchFactor(1, 3)
+        self.left_split.splitterMoved.connect(self._on_left_split_moved)
 
         row1.addWidget(left_col, 7)
         row1.addWidget(self._build_right_panel(), 2)
@@ -39478,6 +39498,43 @@ class PSKMainWindow(QMainWindow):
             print(f"⚠️ création/affichage fenêtre CW : {type(e).__name__}: {e}")
             return False
 
+    def _on_left_split_moved(self, *_):
+        """V8.5.11 : mémorise le partage waterfall / réception choisi, séparément pour JS8 et les autres modes."""
+        try:
+            key = 'JS8' if getattr(self, '_family', '') == 'JS8' else 'autres'
+            self._left_split_sizes = dict(getattr(self, '_left_split_sizes', {}) or {})
+            self._left_split_sizes[key] = [int(x) for x in self.left_split.sizes()]
+            t = getattr(self, '_left_split_save_timer', None)
+            if t is None:                                  # une seule écriture, 0,8 s après la fin du déplacement
+                t = self._left_split_save_timer = QTimer(self)
+                t.setSingleShot(True)
+                t.setInterval(800)
+                t.timeout.connect(self._save_settings)
+            t.start()
+        except Exception:
+            pass
+
+    def _apply_left_split(self):
+        """V8.5.11 : en JS8, la Band Activity prend d'office la place de la réception (qui fait doublon)."""
+        try:
+            sp = self.left_split
+            total = sum(sp.sizes())
+            if total < 150:                                # fenêtre pas encore dimensionnée : on réessaie
+                n = getattr(self, '_left_split_retry', 0)
+                if n < 20:
+                    self._left_split_retry = n + 1
+                    QTimer.singleShot(150, self._apply_left_split)
+                return
+            key = 'JS8' if getattr(self, '_family', '') == 'JS8' else 'autres'
+            saved = (getattr(self, '_left_split_sizes', {}) or {}).get(key)
+            if saved and len(saved) == 2 and sum(saved) > 0:
+                f = saved[0] / float(sum(saved))
+            else:
+                f = 0.80 if key == 'JS8' else 0.34          # autres modes : réception à sa hauteur d'avant (max 330)
+            sp.setSizes([int(total * f), total - int(total * f)])
+        except Exception:
+            pass
+
     def _on_family_changed(self, family):
         """MULTIDIGI V0.1 F4LPS : appelé quand l'opérateur change de famille
         de mode (PSK/OLIVIA/DOMINOEX/RTTY/JS8). Repeuple mode_combo avec les
@@ -39522,6 +39579,8 @@ class PSKMainWindow(QMainWindow):
                 self.js8_decode_status.setVisible(fam == "JS8")
             if hasattr(self, "js8_activity_panel"):
                 self.js8_activity_panel.setVisible(fam == "JS8")
+            if hasattr(self, "left_split"):
+                QTimer.singleShot(0, self._apply_left_split)      # V8.5.11 : partage propre à JS8 / autres modes
             if hasattr(self, "js8_command_panel"):
                 self.js8_command_panel.setVisible(fam == "JS8")
             if hasattr(self, "js8_auto_grp"):
@@ -40161,6 +40220,10 @@ class PSKMainWindow(QMainWindow):
         streams = self.__dict__.get('_js8_streams', [])
         tbl.setUpdatesEnabled(False)
         try:
+            vh = tbl.verticalHeader()                    # le thème recalcule la hauteur : on la réimpose (lignes compactes)
+            if vh.minimumSectionSize() > 16 or vh.defaultSectionSize() != 18:
+                vh.setMinimumSectionSize(16)
+                vh.setDefaultSectionSize(18)
             tbl.setRowCount(len(streams))
             now = time.time()
             for row, st in enumerate(streams):
@@ -40468,6 +40531,10 @@ class PSKMainWindow(QMainWindow):
         tbl = getattr(self, "js8_calls_table", None)
         if tbl is None:
             return
+        vh = tbl.verticalHeader()                        # V8.5.11 : lignes compactes (le thème les remet à 21 px)
+        if vh.minimumSectionSize() > 16 or vh.defaultSectionSize() != 18:
+            vh.setMinimumSectionSize(16)
+            vh.setDefaultSectionSize(18)
         vals = sorted(
             self._js8_calls_activity.values(),
             key=lambda d: float(d.get("epoch", 0.0)), reverse=True
@@ -41493,6 +41560,11 @@ class PSKMainWindow(QMainWindow):
                 self.mode_combo.setCurrentText(saved_mode)
                 # V8.4 F4LPS : thème d'interface mémorisé (aluminium usé / carbone / néon).
                 self._apply_ui_theme(str(d.get("ui_theme", UI_THEME_DEFAULT)))
+                try:                                   # V8.5.11 : partage waterfall / réception par famille
+                    self._left_split_sizes = {str(k): [int(v[0]), int(v[1])]
+                                              for k, v in dict(d.get('left_split_sizes', {}) or {}).items()}
+                except Exception:
+                    self._left_split_sizes = {}
                 # V8.4 F4LPS : préférence de traduction RX mémorisée (OFF par défaut).
                 if hasattr(self, 'rx_translate_dst'):
                     idx_rt = self.rx_translate_dst.findData(str(d.get('rx_translate_dst', 'fr')))
@@ -41685,6 +41757,7 @@ class PSKMainWindow(QMainWindow):
                 "ui_theme": getattr(self, '_ui_theme', UI_THEME_DEFAULT),
                 "rx_translate_enabled": bool(self.rx_translate_enable.isChecked()) if hasattr(self, 'rx_translate_enable') else False,
                 "rx_translate_dst": self.rx_translate_dst.currentData() if hasattr(self, 'rx_translate_dst') else 'fr',
+                "left_split_sizes": dict(getattr(self, '_left_split_sizes', {}) or {}),   # V8.5.11
                 "rx_radio_language": bool(self.rx_radio_language_enable.isChecked()) if hasattr(self, 'rx_radio_language_enable') else False,
                 "update_autocheck": bool(self.update_autocheck_cb.isChecked()) if hasattr(self, 'update_autocheck_cb') else True,
                 "center_freq": float(self.center_freq_spin.value()),

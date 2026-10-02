@@ -4,7 +4,7 @@
 ; traces à côté de l'exécutable sans problème de permission.
 
 #define MyAppName "MultiDigi"
-#define MyAppVersion "8.5.10"
+#define MyAppVersion "8.5.11"
 #define MyAppPublisher "F4LPS"
 #define MyAppURL "https://github.com/f4lps/multidigi"
 #define MyAppExeName "MultiDigi.exe"
@@ -36,7 +36,7 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 Name: "desktopicon"; Description: "Créer une icône sur le Bureau"; GroupDescription: "Icônes supplémentaires :"
 
 [Files]
-Source: "..\dist-cw-8.5.10\MultiDigi\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist-cw-8.5.11\MultiDigi\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
