@@ -17,7 +17,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.9"
+PROGRAM_VERSION_TAG = "8.5.10"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -40091,31 +40091,96 @@ class PSKMainWindow(QMainWindow):
         # V8.4 F4LPS : log auto du QSO quand une trame dirigée nous répond.
         self._js8_maybe_log_reply(new_rows)
 
-        # Les plus récents en tête, présentation JS8Call-like.
+        # V8.5.10 : comme JS8Call, UNE ligne par station (fréquence ±10 Hz) : les trames d'un long message se
+        # suivent sur la même ligne au lieu d'une ligne par trame. « ♢ » = fin de message (bit « dernière trame »).
+        for h in reversed(new_rows):                      # du plus ancien au plus récent
+            print(
+                f"🔗 V96 UI_BAND_ACTIVITY_INSERT "
+                f"F={float(h.get('freq_hz',0)):.1f} "
+                f"MSG={str(h.get('text12',''))!r}"
+            )
+            self._js8_merge_stream(h)
+            self._js8_update_callsign_activity(h)
+        self._js8_render_band_table()
+        self._js8_rebuild_calls_table()
+
+    _JS8_STREAM_HZ = 10.0          # même station si l'offset est à ±10 Hz (NEAR_THRESHOLD_RX de JS8Call)
+    _JS8_STREAM_IDLE_S = 600.0     # au-delà de 10 min sans trame : nouvelle ligne
+
+    def _js8_merge_stream(self, h):
+        """V8.5.10 : ajoute une trame décodée à la ligne de sa station (fréquence), ou crée une ligne."""
+        streams = self.__dict__.setdefault('_js8_streams', [])
+        try:
+            f = float(h.get("freq_hz", 0.0))
+            ep = float(h.get("epoch", time.time()))
+        except Exception:
+            return
+        txt = str(h.get("text12", "") or "")
+        bits = int(h.get("i3bit", 0) or 0)
+        st = None
+        for cand in streams:
+            if abs(cand["freq_hz"] - f) <= self._JS8_STREAM_HZ and ep - cand["epoch"] <= self._JS8_STREAM_IDLE_S:
+                st = cand
+                break
+        if st is None:
+            st = {"freq_hz": f, "epoch": ep, "snr_db": h.get("snr_db", 0.0), "text": "", "call": "",
+                  "ended": True, "hit": dict(h)}
+        else:
+            streams.remove(st)
+        if st["text"]:
+            if st["ended"]:
+                st["text"] += "   "                       # nouveau message de la même station
+            elif bits & 1:
+                st["text"] += " … "                       # début d'un message alors que le précédent n'était pas fini
+        st["text"] = re.sub(r" {4,}", "   ", st["text"] + txt)
+        if bits & 2:                                       # JS8CallLast
+            st["text"] = st["text"].rstrip() + " ♢"
+        st["ended"] = bool(bits & 2)
+        if len(st["text"]) > 1500:
+            st["text"] = "…" + st["text"][-1500:]
+        call = str(h.get("from_call", "") or "").strip()
+        if not call:
+            m = re.match(r"\s*([A-Z0-9/]{3,}):", txt)
+            call = m.group(1) if m else ""
+        if call:
+            st["call"] = call
+        st["freq_hz"] = f
+        st["epoch"] = ep
+        st["snr_db"] = h.get("snr_db", st["snr_db"])
+        hit = dict(h)
+        hit["text12"] = st["text"]                         # clic / double-clic : indicatif cherché dans tout le message
+        if st["call"] and not hit.get("from_call"):
+            hit["from_call"] = st["call"]
+        st["hit"] = hit
+        streams.insert(0, st)                              # station la plus récente en tête
+        del streams[200:]
+
+    def _js8_render_band_table(self):
+        """V8.5.10 : redessine la Band Activity depuis les lignes par station (la plus récente en haut)."""
+        tbl = self.js8_band_table
+        streams = self.__dict__.get('_js8_streams', [])
         tbl.setUpdatesEnabled(False)
         try:
-            for h in new_rows:
-                print(
-                    f"🔗 V96 UI_BAND_ACTIVITY_INSERT "
-                    f"F={float(h.get('freq_hz',0)):.1f} "
-                    f"MSG={str(h.get('text12',''))!r}"
-                )
-                tbl.insertRow(0)
+            tbl.setRowCount(len(streams))
+            now = time.time()
+            for row, st in enumerate(streams):
+                text = st["text"].strip()
+                call = st["call"]
+                shown = text if (not call or text.startswith(call)) else f"{call}: {text}"
+                if len(shown) > 160:
+                    shown = "…" + shown[-160:]
                 items = [
-                    QTableWidgetItem(f"{h['freq_hz']:.0f} Hz"),
-                    QTableWidgetItem("now"),
-                    QTableWidgetItem(f"{h['snr_db']:+.0f} dB"),
-                    QTableWidgetItem(str(h.get("text12", ""))),
+                    QTableWidgetItem(f"{st['freq_hz']:.0f} Hz"),
+                    QTableWidgetItem(self._js8_age_text(now - st["epoch"])),
+                    QTableWidgetItem(f"{float(st['snr_db']):+.0f} dB"),
+                    QTableWidgetItem(shown),
                 ]
+                items[3].setToolTip(f"{call + ' — ' if call else ''}{st['freq_hz']:.0f} Hz\n\n{text}")
                 for col, it in enumerate(items):
-                    it.setData(Qt.UserRole, h)
-                    tbl.setItem(0, col, it)
-                self._js8_update_callsign_activity(h)
-            while tbl.rowCount() > 200:
-                tbl.removeRow(tbl.rowCount() - 1)
+                    it.setData(Qt.UserRole, st["hit"])
+                    tbl.setItem(row, col, it)
         finally:
             tbl.setUpdatesEnabled(True)
-        self._js8_rebuild_calls_table()
 
     @staticmethod
     def _js8_age_text(seconds):
