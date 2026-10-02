@@ -36,6 +36,7 @@ def _pg_release_link(link):
     if kind in ('civ', 'yaesu', 'yaesu_ascii', 'lines'):
         import serial
         if '://' in str(link['port']):                     # adresse pyserial (tests : socket://127.0.0.1:port)
+            import serial.urlhandler.protocol_socket       # noqa: F401  (embarqué dans l'exe : test de l'exe compilé)
             sp = serial.serial_for_url(link['port'], do_not_open=True)
         else:
             sp = serial.Serial()
