@@ -1,5 +1,14 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 2 octobre 2026 (soir) — MultiDigi 8.5.11 PUBLIÉE (sur accord)
+- Release id 402017775 « latest », `MultiDigi_Setup_8.5.11.exe` 145 516 372 octets, SHA256 `4ac7694d…be2b` identique,
+  `main` = `ac75d55` poussé. Exe testé : fenêtre V8.5.11.
+- JS8 Band Activity / Callsigns : lignes 18 px (réimposées au rendu, le thème les remet à 21), plus de hauteur max,
+  séparateur `left_split` (haut / réception), 80 % au haut en JS8, partage mémorisé par famille (`left_split_sizes`).
+  Mesuré à 1920×1040 : 10 messages visibles au lieu de 4. Autres modes : disposition inchangée (à 5 px près).
+- ⚠️ Les tests MultiDigi (PSKMainWindow) écrivent dans `miltidigi/psk_terminal_settings.json` (dossier du script,
+  ignoré par git, pas utilisé par l'installé). Le vrai fichier `~/psk_terminal_settings.json` n'est pas touché.
+
 ## ▶▶ 2 octobre 2026 (soir) — MultiDigi 8.5.10 PUBLIÉE (sur accord)
 - Release id 401981498 « latest », `MultiDigi_Setup_8.5.10.exe` 145 532 393 octets, SHA256 `9d0bb0eb…27f9` identique,
   `main` = `7526f92` poussé. Compilé dans `dist-cw-8.5.10` (installeur pointe dessus). Exe testé : fenêtre V8.5.10.
