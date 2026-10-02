@@ -1,5 +1,13 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 2 octobre 2026 (soir) — MultiDigi 8.5.10 PUBLIÉE (sur accord)
+- Release id 401981498 « latest », `MultiDigi_Setup_8.5.10.exe` 145 532 393 octets, SHA256 `9d0bb0eb…27f9` identique,
+  `main` = `7526f92` poussé. Compilé dans `dist-cw-8.5.10` (installeur pointe dessus). Exe testé : fenêtre V8.5.10.
+- Fenêtre CW : waterfall fin comme CW Terminal 1.9.12 (`_cwwf_reassigned_row`, `PSKAudioThread._cw_wf_feed` -> `cw_wf_rows`
+  -> `CWWaterfallZoom.add_rows`). Test `CW_Terminal_Dev/test_md_cwwaterfall.py [wpm]`.
+- JS8 Band Activity : une ligne par station (±10 Hz, 10 min), trames concaténées, « ♢ » sur i3bit & 2 (`_js8_merge_stream`,
+  `_js8_render_band_table`). Test `CW_Terminal_Dev/test_md_js8_band.py`. NON vérifié sur un vrai long message JS8.
+
 ## ▶▶ 2 octobre 2026 (après-midi) — CW Terminal 1.9.12 PUBLIÉE (sur accord)
 - Release id 401881394 « latest », `CW_Terminal_Setup_1.9.12.exe` 185 833 253 octets, SHA256 `76517570…4552` identique
   (compilé depuis `783606b` dans `dist_1912`, l'utilisateur avait `dist` ouvert). Exe testé : fenêtre V1.9.12.
