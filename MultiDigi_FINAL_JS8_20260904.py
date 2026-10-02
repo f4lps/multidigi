@@ -1,3 +1,272 @@
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# F4LPS — GARDE D'ÉMISSION (commune à MultiDigi et CW Terminal)
+# Si le programme s'arrête sans fermeture normale (plantage Windows « access violation », fin de tâche…), aucun code de
+# nettoyage ne tourne et la radio peut rester en émission. Un petit processus séparé (le même exécutable lancé avec
+# --f4lps-ptt-guard) attend la fin du programme ; si elle n'est pas « propre », il ouvre lui-même la liaison radio et
+# envoie l'ordre de réception (CI-V, Yaesu, HRD, FLRig, OmniRig), arrête le CW natif et baisse DTR/RTS.
+# Il ne fait RIEN tant que le programme tourne. Journal : %LOCALAPPDATA%\F4LPS\ptt_guard.log
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+import os as _pg_os
+import sys as _pg_sys
+
+_PG_FLAG = '--f4lps-ptt-guard'
+
+
+def _pg_dir():
+    d = _pg_os.path.join(_pg_os.environ.get('LOCALAPPDATA') or _pg_os.path.expanduser('~'), 'F4LPS')
+    try:
+        _pg_os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _pg_log(msg):
+    try:
+        import time as _t
+        with open(_pg_os.path.join(_pg_dir(), 'ptt_guard.log'), 'a', encoding='utf-8') as f:
+            f.write(f"{_t.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
+def _pg_release_link(link):
+    """Remet la radio en réception par une liaison décrite par le programme. Retourne un texte de compte rendu."""
+    kind = link.get('kind')
+    if kind in ('civ', 'yaesu', 'yaesu_ascii', 'lines'):
+        import serial
+        if '://' in str(link['port']):                     # adresse pyserial (tests : socket://127.0.0.1:port)
+            sp = serial.serial_for_url(link['port'], do_not_open=True)
+        else:
+            sp = serial.Serial()
+            sp.port = link['port']
+        sp.baudrate = int(link.get('baud') or 9600)
+        sp.bytesize, sp.parity = 8, 'N'
+        sp.stopbits = 2 if int(link.get('stopbits') or 1) == 2 else 1
+        sp.timeout = sp.write_timeout = 1
+        sp.dtr = False                                     # lignes basses AVANT l'ouverture : PTT / manipulation relâchés
+        sp.rts = False
+        last = None
+        for _ in range(15):                                # le port se libère quand Windows a fermé le programme
+            try:
+                sp.open()
+                break
+            except Exception as e:
+                last = e
+                import time as _t
+                _t.sleep(0.2)
+        else:
+            return f"{kind} {link['port']} : port impossible à ouvrir ({last})"
+        try:
+            sp.dtr = False
+            sp.rts = False
+            if kind == 'civ':
+                civ = int(link.get('civ') or 0x94)
+                for _ in range(2):
+                    sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x17, 0xFF, 0xFD]))   # arrêt du message CW natif
+                    sp.write(bytes([0xFE, 0xFE, civ, 0xE0, 0x1C, 0x00, 0x00, 0xFD]))   # TX OFF
+                    sp.flush()
+            elif kind == 'yaesu_ascii':
+                for _ in range(2):
+                    sp.write(b'TX0;')
+                    sp.flush()
+            elif kind == 'yaesu':
+                for _ in range(2):
+                    sp.write(bytes([0x00, 0, 0, 0, 0x88]))                # CAT 5 octets : PTT OFF
+                    sp.flush()
+            import time as _t
+            _t.sleep(0.15)
+        finally:
+            try:
+                sp.close()
+            except Exception:
+                pass
+        return f"{kind} {link['port']} : réception envoyée"
+    if kind == 'hrd':
+        import socket
+        import struct
+        btns = link.get('buttons') or ([link['button']] if link.get('button') else ['TX', 'MOX', 'PTT'])
+        for btn in btns:                                   # bouton inexistant : HRD l'ignore, sans risque
+            payload = (f"set button-select {btn} 0" + '\x00').encode('utf-16-le')
+            s = socket.create_connection((link.get('host') or '127.0.0.1', int(link.get('port') or 7809)), timeout=3)
+            try:
+                s.sendall(struct.pack('<IIIi', 16 + len(payload), 0x1234ABCD, 0xABCD1234, 0) + payload)
+                s.recv(256)
+            finally:
+                s.close()
+        return f"HRD {link.get('host')}:{link.get('port')} : bouton(s) {', '.join(btns)} relâché(s)"
+    if kind == 'flrig':
+        import xmlrpc.client
+        srv = xmlrpc.client.ServerProxy(f"http://{link.get('host') or '127.0.0.1'}:{int(link.get('port') or 12345)}")
+        try:
+            srv.rig.set_ptt(0)
+        except Exception:
+            srv.main.set_ptt(0)
+        return "FLRig : PTT relâché"
+    if kind == 'omnirig':
+        import win32com.client
+        omni = win32com.client.Dispatch('OmniRig.OmniRigX')
+        rig = omni.Rig2 if int(link.get('rig') or 1) == 2 else omni.Rig1
+        rig.Tx = 0
+        return f"OmniRig Rig{link.get('rig') or 1} : TX relâché"
+    return f"liaison inconnue {kind}"
+
+
+def _pg_guard_main(argv):
+    """Processus de garde : attend la fin du programme, puis remet la radio en réception si la fin n'est pas propre."""
+    import json
+    import time as _t
+    try:
+        pid, state_path = int(argv[0]), argv[1]
+    except Exception:
+        return
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x00100000, False, pid)       # SYNCHRONIZE
+        if not h:
+            return
+        k32.WaitForSingleObject(ctypes.c_void_p(h), 0xFFFFFFFF)
+        k32.CloseHandle(ctypes.c_void_p(h))
+    except Exception:
+        return
+    try:
+        with open(state_path, encoding='utf-8') as f:
+            st = json.load(f)
+    except Exception:
+        st = {}
+    try:
+        if st.get('clean'):
+            return
+        links = st.get('links') or []
+        if not links:
+            return
+        _pg_log(f"{st.get('app', '?')} (pid {pid}) arrêté sans fermeture normale "
+                f"(émission en cours : {'OUI' if st.get('tx') else 'non'}) -> remise en réception")
+        _t.sleep(0.3)
+        for link in links:
+            try:
+                _pg_log("  " + _pg_release_link(link))
+            except Exception as e:
+                _pg_log(f"  {link.get('kind')} : échec {type(e).__name__}: {e}")
+    finally:
+        try:
+            _pg_os.remove(state_path)
+        except Exception:
+            pass
+
+
+if len(_pg_sys.argv) > 2 and _pg_sys.argv[1] == _PG_FLAG:
+    _pg_guard_main(_pg_sys.argv[2:])
+    _pg_os._exit(0)
+
+
+class _PttGuard:
+    """Côté programme : lance le processus de garde, tient à jour l'état (liaisons radio, émission en cours),
+    marque la fermeture propre. Les mêmes liaisons servent aussi à couper l'émission sur une erreur Python."""
+
+    def __init__(self, app):
+        import threading
+        self.app = app
+        self.path = _pg_os.path.join(_pg_dir(), f"ptt_guard_{app}_{_pg_os.getpid()}.json")
+        self._state = {'app': app, 'pid': _pg_os.getpid(), 'clean': False, 'tx': False, 'links': []}
+        self._lock = threading.Lock()
+        self._proc = None
+        self._release_cbs = []          # fonctions « remettre en réception » dans le programme (erreurs Python, sortie)
+
+    def start(self):
+        import subprocess
+        self._write()
+        try:
+            if getattr(_pg_sys, 'frozen', False):
+                cmd = [_pg_sys.executable, _PG_FLAG, str(_pg_os.getpid()), self.path]
+            else:
+                exe = _pg_sys.executable
+                w = _pg_os.path.join(_pg_os.path.dirname(exe), 'pythonw.exe')
+                cmd = [w if _pg_os.path.exists(w) else exe, _pg_os.path.abspath(_pg_sys.argv[0]),
+                       _PG_FLAG, str(_pg_os.getpid()), self.path]
+            self._proc = subprocess.Popen(cmd, close_fds=True, creationflags=0x08000000 | 0x00000200)  # sans fenêtre
+        except Exception as e:
+            _pg_log(f"{self.app} : garde d'émission non lancée ({e})")
+        self._install_hooks()
+        return self
+
+    def _write(self):
+        import json
+        try:
+            tmp = self.path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self._state, f)
+            _pg_os.replace(tmp, self.path)
+        except Exception:
+            pass
+
+    def set_links(self, links):
+        links = [dict(l) for l in (links or []) if l and l.get('kind')]
+        with self._lock:
+            if links != self._state['links']:
+                self._state['links'] = links
+                self._write()
+
+    def set_tx(self, on):
+        with self._lock:
+            if bool(on) != self._state['tx']:
+                self._state['tx'] = bool(on)
+                self._write()
+
+    def on_release(self, fn):
+        self._release_cbs.append(fn)
+
+    def release_now(self, reason):
+        """Remet en réception depuis le programme (erreur Python non rattrapée, sortie)."""
+        if not self._state.get('tx'):
+            return
+        _pg_log(f"{self.app} : {reason} pendant l'émission -> remise en réception")
+        for fn in list(self._release_cbs):
+            try:
+                fn()
+            except Exception as e:
+                _pg_log(f"  remise en réception : échec {type(e).__name__}: {e}")
+        self.set_tx(False)
+
+    def clean_exit(self):
+        """Fermeture normale : la garde ne fait rien (le programme a déjà relâché l'émission lui-même)."""
+        self.release_now("fermeture")
+        with self._lock:
+            self._state['clean'] = True
+            self._write()
+
+    def _install_hooks(self):
+        # Sortie Python normale (fin du programme, sys.exit) : relâche l'émission si elle était en cours, puis marque la
+        # fin propre. Les arrêts brutaux (plantage natif, fin de tâche) sont couverts par le processus de garde.
+        import atexit
+        atexit.register(self.clean_exit)
+
+
+_PTT_GUARD = None
+
+
+def _pg_start(app):
+    """À appeler une fois dans main(). Les tests (sans main()) n'ont pas de garde : les fonctions ci-dessous ne font rien."""
+    global _PTT_GUARD
+    if _PTT_GUARD is None and _pg_os.name == 'nt':
+        _PTT_GUARD = _PttGuard(app).start()
+    return _PTT_GUARD
+
+
+def _pg_tx(on):
+    if _PTT_GUARD is not None:
+        _PTT_GUARD.set_tx(on)
+
+
+def _pg_links(links):
+    if _PTT_GUARD is not None:
+        _PTT_GUARD.set_links(links)
+
+
+# ── FIN GARDE D'ÉMISSION ──────────────────────────────────────────────────────────────────────────────────────────
+
 # V76 F4LPS — DATA JS8 lisible : Huffman + (s,c)-Dense JSC, base V75 stable
 # V96 CRC TO BAND ACTIVITY TRACE — basé sur V95 stable.
 # V80 conservé + promotion ciblée des graines Costas isolées >=5/7.
@@ -17,7 +286,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.11"
+PROGRAM_VERSION_TAG = "8.5.12"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -453,8 +722,43 @@ try:
 except ImportError:
     OMNIRIG_AVAILABLE = False
 
+# V8.5.12 / V1.9.13 F4LPS — VERROU PORTAUDIO. PortAudio n'accepte pas que deux fils l'initialisent / ouvrent / ferment un
+# flux en même temps : MultiDigi s'est arrêté net (« Windows fatal exception: access violation », pyaudio __init__ et
+# open dans deux fils d'émission) en plein passage en émission. Toutes ces opérations passent par un même verrou ;
+# la lecture / l'écriture audio (bloquantes) n'y passent pas.
+def _f4lps_lock_pyaudio(_pa_mod):
+    import threading as _th
+    if getattr(_pa_mod, '_f4lps_locked', False):
+        return
+    _lk = _th.RLock()
+    _Base = _pa_mod.PyAudio
+
+    class _LockedPyAudio(_Base):
+        def __init__(self, *a, **k):
+            with _lk:
+                _Base.__init__(self, *a, **k)
+
+        def open(self, *a, **k):
+            with _lk:
+                return _Base.open(self, *a, **k)
+
+        def terminate(self, *a, **k):
+            with _lk:
+                return _Base.terminate(self, *a, **k)
+
+    _close = _pa_mod.Stream.close
+
+    def _locked_close(self, *a, **k):
+        with _lk:
+            return _close(self, *a, **k)
+    _pa_mod.Stream.close = _locked_close
+    _pa_mod.PyAudio = _LockedPyAudio
+    _pa_mod._f4lps_locked = True
+
+
 try:
     import pyaudio
+    _f4lps_lock_pyaudio(pyaudio)
     PYAUDIO_AVAILABLE = True
 except ImportError:
     PYAUDIO_AVAILABLE = False
@@ -28519,6 +28823,65 @@ class RadioController:
 
 
 # ── HRD IP Server + FLRig pour Radio CAT PSK ────────────────────────────────
+def _md_guard_links(rc):
+    """V8.5.12 : liaisons radio de `rc` pour la garde d'émission (ce qu'il faudra remettre en réception)."""
+    links = []
+    try:
+        ct = getattr(rc, 'connection_type', None)
+        sp = getattr(rc, 'serial_port', None)
+        if ct == 'serial' and sp is not None and getattr(sp, 'is_open', False):
+            proto = getattr(rc, 'protocol', 'icom')
+            kind = {'icom': 'civ', 'yaesu_ascii': 'yaesu_ascii'}.get(proto, 'yaesu')
+            links.append({'kind': kind, 'port': sp.port, 'baud': int(sp.baudrate), 'civ': int(getattr(rc, 'civ_address', 0x94)),
+                          'stopbits': 2 if float(getattr(sp, 'stopbits', 1)) >= 2 else 1})
+        elif ct == 'hrd' and getattr(rc, '_hrd_client', None) is not None:
+            c = rc._hrd_client
+            btn = getattr(c, '_tx_button_name', None)
+            links.append({'kind': 'hrd', 'host': c.host, 'port': int(c.port),
+                          'buttons': [btn] if btn else ['TX', 'MOX', 'PTT']})
+        elif ct == 'flrig':
+            hp = str(getattr(getattr(rc, '_flrig_proxy', None), '_ServerProxy__host', '') or '127.0.0.1:12345')
+            host, _, port = hp.partition(':')
+            links.append({'kind': 'flrig', 'host': host or '127.0.0.1', 'port': int(port or 12345)})
+        elif ct == 'omnirig':
+            links.append({'kind': 'omnirig', 'rig': int(getattr(rc, 'omnirig_rig_number', 1) or 1)})
+        aux = getattr(rc, '_cw_aux', None)                 # port CAT auxiliaire du CW natif (HRD/FLRig/OmniRig)
+        if aux and getattr(aux.get('sp'), 'is_open', False):
+            links.append({'kind': 'civ', 'port': aux['sp'].port, 'baud': int(aux['sp'].baudrate), 'civ': int(aux['civ'])})
+    except Exception:
+        pass
+    return links
+
+
+_MD_RC_PTT_ON = RadioController.ptt_on
+_MD_RC_PTT_OFF = RadioController.ptt_off
+_MD_RC_CW_SEND = getattr(RadioController, 'cw_send_text', None)
+
+
+def _md_rc_ptt_on(self, *a, **k):
+    _pg_links(_md_guard_links(self))                   # la garde sait quoi couper AVANT que la radio passe en émission
+    _pg_tx(True)
+    return _MD_RC_PTT_ON(self, *a, **k)
+
+
+def _md_rc_ptt_off(self, *a, **k):
+    try:
+        return _MD_RC_PTT_OFF(self, *a, **k)
+    finally:
+        _pg_tx(False)
+
+
+def _md_rc_cw_send(self, *a, **k):
+    _pg_links(_md_guard_links(self))
+    return _MD_RC_CW_SEND(self, *a, **k)
+
+
+RadioController.ptt_on = _md_rc_ptt_on
+RadioController.ptt_off = _md_rc_ptt_off
+if _MD_RC_CW_SEND is not None:
+    RadioController.cw_send_text = _md_rc_cw_send
+
+
 class _HRDRigControlClient:
     MAGIC1 = 0x1234ABCD
     MAGIC2 = 0xABCD1234
@@ -38197,6 +38560,10 @@ class PSKMainWindow(QMainWindow):
         if isinstance(override_text, bool):
             override_text = None
         if self._tx_active: return
+        _txt = getattr(self, 'tx_thread', None)
+        if _txt is not None and _txt.isRunning():          # V8.5.12 : émission précédente pas encore finie
+            print("TX refusé : une émission est déjà en cours")
+            return
         is_test_tx = override_text is not None
         self._tx_test_mode = bool(is_test_tx)
         self._tx_saved_text_before_test = None
@@ -38414,6 +38781,10 @@ class PSKMainWindow(QMainWindow):
             self.waterfall._tx_pos = 0
         except Exception:
             pass
+        _txt = getattr(self, 'tx_thread', None)
+        if _txt is not None and _txt.isRunning():          # V8.5.12 : jamais deux fils d'émission (plantage PortAudio)
+            print("TX refusé : une émission est déjà en cours")
+            return
         self.tx_thread = PSKTxThread(self.encoder_obj, self._pending_tx_text,
                                      self._pending_tx_dev, self._pending_tx_sr,
                                      getattr(self, '_pending_tx_hz', None),
@@ -41692,7 +42063,8 @@ class PSKMainWindow(QMainWindow):
                 for i,mac in enumerate(d.get("macros",[])[:len(self._macros)]):
                     mac=mac.replace("via eQSL.cc or via the bureau.","{QSL}.").replace("via eQSL.cc or via the bureau","{QSL}").replace("My QSL is OK via eQSL.cc","My QSL is OK {QSL}").replace("North-East France","").replace("Software : HRD + DM780","Software : MultiDigi V2.1.2")
                     self._macros[i]=mac
-                    if i<len(self._macro_edits): self._macro_edits[i].setText(mac)
+                    _me = getattr(self, "_macro_edits", [])   # V8.5.12 : absent de la fenêtre principale -> chargement interrompu
+                    if i<len(_me): _me[i].setText(mac)
                 # La cle "macros" historique correspond au jeu de la famille
                 # active au moment de la sauvegarde (PSK par defaut).
                 try:
@@ -46868,10 +47240,13 @@ def main():
         pass
     app = QApplication(sys.argv)
     app.setApplicationName("MultiDigi")
+    _pg_start('MultiDigi')                                 # V8.5.12 : garde d'émission (plantage, fin de tâche)
     app.setOrganizationName("F4LPS")
     app.setApplicationVersion("1.1")
 
     win = PSKMainWindow()
+    if _PTT_GUARD is not None:                             # sortie Python pendant une émission : réception d'abord
+        _PTT_GUARD.on_release(lambda: (win.radio_ctrl.cw_stop(), win.radio_ctrl.ptt_off()))
     win.showMaximized()
     if _SPLASH_OK and _splash_root is not None:
         try:
