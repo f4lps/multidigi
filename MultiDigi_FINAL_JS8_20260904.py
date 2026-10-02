@@ -475,7 +475,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QThread, QPoint, QRect, QUrl
 from PyQt5.QtGui import (
-    QFont, QColor, QTextCursor, QTextCharFormat, QPen, QPainter, QImage, QPixmap,
+    QFont, QColor, QTextCursor, QTextCharFormat, QPen, QPainter, QImage, QPixmap, QPolygon,
     QDesktopServices,
 )
 
@@ -23997,6 +23997,32 @@ def multidigi_get_encoder(family, mode, sample_rate, center_freq=1500.0):
 
 
 
+# V8.5.10 : waterfall CW fin, même méthode que CW Terminal 1.9.12.
+_CWWF_RES_HZ = 2.0
+_CWWF_MAX_HZ = 4000.0
+_CWWF_HOP = 512
+_CWWF_KERNEL = np.exp(-0.5 * (np.arange(-4, 5) * _CWWF_RES_HZ / 3.0) ** 2); _CWWF_KERNEL /= _CWWF_KERNEL.sum()
+
+
+def _cwwf_reassigned_row(seg, win, dwin, sr):
+    """Ligne de waterfall CW (dB, grille de 2 Hz, 0…4 kHz) par réallocation spectrale : l'énergie de chaque case est
+    replacée à la fréquence réelle du signal (phase, fenêtre dérivée) -> trace fine même avec une fenêtre courte.
+    Déplacements > 1,2 case écartés (fronts de manipulation), fond uniforme au niveau médian du bruit."""
+    L = win.size
+    xh = np.fft.rfft(seg * win)
+    xd = np.fft.rfft(seg * dwin)
+    pw = (xh.real * xh.real + xh.imag * xh.imag).astype(np.float64)
+    fb = np.arange(xh.size) * (sr / L)
+    fr = fb - np.imag(xd * np.conj(xh)) / np.maximum(pw, 1e-30) * (sr / (2.0 * np.pi))
+    nbin = int(_CWWF_MAX_HZ / _CWWF_RES_HZ)
+    ok = (fr >= 0.0) & (fr < _CWWF_MAX_HZ) & (pw > 0.0) & (np.abs(fr - fb) <= 1.2 * sr / L)
+    out = np.bincount((fr[ok] / _CWWF_RES_HZ).astype(np.int64), weights=pw[ok], minlength=nbin)[:nbin]
+    nb_max = max(8, int(_CWWF_MAX_HZ * L / sr))
+    out += float(np.median(pw[1:nb_max])) * (_CWWF_RES_HZ * L / sr)
+    out = np.convolve(out, _CWWF_KERNEL, mode='same')
+    return (10.0 * np.log10(np.maximum(out, 1e-20))).astype(np.float32)
+
+
 class PSKAudioThread(QThread):
     text_decoded  = pyqtSignal(str)
     band_activity_ready = pyqtSignal()
@@ -24005,6 +24031,7 @@ class PSKAudioThread(QThread):
     envelope_data = pyqtSignal(float)
     raw_audio     = pyqtSignal(object)   # numpy float32 array — autopitch
     diagnostic_data = pyqtSignal(object) # état interne RX
+    cw_wf_rows    = pyqtSignal(object, float, float)   # V8.5.10 : lignes fines du waterfall CW (dB, Hz/case, ms/ligne)
 
     # V0.3 F4LPS — WATERFALL PLUS FIN.
     # Mesuré : à 44100 Hz, une FFT de 2048 donne des bins de 21,5 Hz alors que
@@ -24094,6 +24121,35 @@ class PSKAudioThread(QThread):
             self.decoder.set_dx_mode(enabled)
         except Exception:
             pass
+
+    def _cw_wf_feed(self, samples):
+        """V8.5.10 : une ligne de waterfall CW tous les 512 échantillons, fenêtre ≈ 0,8 point à la vitesse décodée."""
+        sr = float(self.sample_rate or 48000)
+        if getattr(self, '_cwwf_sr', None) != sr:
+            self._cwwf_sr = sr
+            self._cwwf_buf = np.zeros(4096, dtype=np.float32)
+            self._cwwf_pend = np.zeros(0, dtype=np.float32)
+            self._cwwf_win = None
+        try:
+            wpm = float(getattr(getattr(self.decoder, '_d', self.decoder), 'wpm', 0) or 0)
+        except Exception:
+            wpm = 0.0
+        want = 0.8 * (1.2 / wpm) * sr if 5.0 <= wpm <= 60.0 else 2048
+        L = max([n for n in (1024, 1536, 2048, 3072, 4096) if n <= max(1024.0, want)])
+        if self._cwwf_win is None or self._cwwf_win.size != L:
+            self._cwwf_win = np.hanning(L).astype(np.float32)
+            self._cwwf_dwin = np.gradient(self._cwwf_win).astype(np.float32)
+        pend = np.concatenate((self._cwwf_pend, np.asarray(samples, dtype=np.float32)))
+        rows = []
+        k = 0
+        while pend.size - k >= _CWWF_HOP:
+            self._cwwf_buf[:-_CWWF_HOP] = self._cwwf_buf[_CWWF_HOP:]
+            self._cwwf_buf[-_CWWF_HOP:] = pend[k:k + _CWWF_HOP]
+            k += _CWWF_HOP
+            rows.append(_cwwf_reassigned_row(self._cwwf_buf[-L:], self._cwwf_win, self._cwwf_dwin, sr))
+        self._cwwf_pend = pend[k:]
+        if rows:
+            self.cw_wf_rows.emit(np.vstack(rows), _CWWF_RES_HZ, 1000.0 * _CWWF_HOP / sr)
 
     def run(self):
         self.running = True
@@ -24350,6 +24406,14 @@ class PSKAudioThread(QThread):
                 except Exception:
                     pass
 
+                # V8.5.10 : en CW, lignes fines pour la fenêtre CW (points et traits séparés, traces fines)
+                if cw_capture:
+                    try:
+                        self._cw_wf_feed(samples)
+                    except Exception as _e:
+                        if not getattr(self, '_cwwf_err', False):
+                            self._cwwf_err = True
+                            print(f"CW waterfall fin : {_e}")
                 # V1.6.104 : waterfall RX aligné sur Olivia + SR réel verrouillé.
                 # L'ancienne FFT glissante 8192 + émission toutes les 20 ms créait
                 # des raies verticales/échos. Ici : FFT courte 2048, cadence ~55 ms,
@@ -30149,6 +30213,53 @@ class CWWaterfallZoom(QWidget):
         self._auto_last_target_hz = self.center_hz
         self._auto_same_direction = 0
         self._auto_last_direction = 0
+        # V8.5.10 : lignes fines (réallocation spectrale, une ligne / ~11 ms) envoyées par PSKAudioThread en CW
+        self._fine_t = 0.0
+        self._fine_floor = None
+        self._fine_ceil = None
+        self._fine_map = (None, None)
+
+    def add_rows(self, rows_db, hz_per_bin, row_ms=11.6):
+        """V8.5.10 : ajoute des lignes fines (dB de 0 Hz à 4 kHz, la plus ancienne en premier), chacune UNE fois.
+        Contraste : fond par percentile, plafond qui monte vite et redescend lentement (espaces entre signes sombres)."""
+        try:
+            rows = np.atleast_2d(np.asarray(rows_db, dtype=np.float32))
+            if rows.shape[1] < 8:
+                return
+            self._fine_t = time.time()
+            lo, hi = self._range()
+            width = self._img.shape[1]
+            key = (rows.shape[1], float(hz_per_bin), lo, hi, width)
+            if self._fine_map[0] != key:
+                pos = np.clip(np.linspace(lo, hi, width) / max(1e-9, float(hz_per_bin)), 0.0, rows.shape[1] - 1.001)
+                i0 = np.floor(pos).astype(np.int64)
+                self._fine_map = (key, (i0, (pos - i0).astype(np.float32)))
+            i0, frac = self._fine_map[1]
+            for r in rows:
+                line = r[i0] * (1.0 - frac) + r[i0 + 1] * frac
+                floor = float(np.percentile(line, 35))
+                peak = float(np.percentile(line, 99.7))
+                if self._fine_floor is None:
+                    self._fine_floor, self._fine_ceil = floor, max(peak, floor + 20.0)
+                self._fine_floor = 0.97 * self._fine_floor + 0.03 * floor
+                self._fine_ceil = (0.6 * self._fine_ceil + 0.4 * peak) if peak > self._fine_ceil                     else (0.997 * self._fine_ceil + 0.003 * peak)
+                norm = np.clip((line - self._fine_floor) / max(20.0, self._fine_ceil - self._fine_floor), 0.0, 1.0)
+                self._img[1:] = self._img[:-1]
+                self._img[0] = (np.power(norm, 1.7) * 255.0).astype(np.uint8)
+            self.update()
+        except Exception as e:
+            print(f"CW waterfall lignes fines: {e}")
+
+    def resizeEvent(self, event):
+        # V8.5.10 : une ligne de l'image = un pixel d'écran (pas de fusion de lignes à la mise à l'échelle)
+        rows = max(120, self.height() - 48)
+        if rows != self._rows:
+            img = np.zeros((rows, self._img.shape[1]), dtype=np.uint8)
+            n = min(rows, self._img.shape[0])
+            img[:n] = self._img[:n]
+            self._img = img
+            self._rows = rows
+        super().resizeEvent(event)
 
     def set_center_freq(self, hz):
         """Placement manuel / changement de mode : crée une nouvelle ancre."""
@@ -30230,8 +30341,9 @@ class CWWaterfallZoom(QWidget):
                 if old.size:
                     for y in range(min(self._rows, old.shape[0])):
                         self._img[y] = np.interp(np.linspace(0, old.shape[1]-1, width), np.arange(old.shape[1]), old[y]).astype(np.uint8)
-            self._img[1:] = self._img[:-1]
-            self._img[0] = pix
+            if time.time() - self._fine_t > 0.5:      # V8.5.10 : sans lignes fines seulement (sinon : AFC uniquement)
+                self._img[1:] = self._img[:-1]
+                self._img[0] = pix
             self._latest_db = line
 
             # Alignement automatique CW : recherche locale autour du trait vert,
@@ -30346,8 +30458,13 @@ class CWWaterfallZoom(QWidget):
         # Trait vert = choix manuel fixe. Le fin trait jaune montre seulement
         # la fréquence suivie par l'AFC interne ; il ne déplace jamais le vert.
         cx = int((self.center_hz-lo)/max(1.0,hi-lo)*(w-1))
-        p.setPen(QPen(QColor('#00ff66'), 2))
+        # V8.5.10 : ligne fine transparente + triangle plein : le repère ne cache plus le signal
+        p.setPen(QPen(QColor(0, 255, 102, 110), 1))
         p.drawLine(cx, ruler_h, cx, h)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor('#00ff66'))
+        p.drawPolygon(QPolygon([QPoint(cx - 6, ruler_h), QPoint(cx + 6, ruler_h), QPoint(cx, ruler_h + 9)]))
+        p.setBrush(Qt.NoBrush)
         afc_hz = float(getattr(self, '_afc_hz', self.center_hz))
         ax = int((afc_hz-lo)/max(1.0,hi-lo)*(w-1))
         if 0 <= ax < w and abs(afc_hz-self.center_hz) >= 0.8:
@@ -34622,6 +34739,7 @@ class PSKMainWindow(QMainWindow):
             self.audio_thread.decoder._band_activity_notify = self.audio_thread.band_activity_ready.emit
         self.audio_thread.diagnostic_data.connect(self._on_rx_diag)
         self.audio_thread.spectrum_data.connect(self._on_spectrum)
+        self.audio_thread.cw_wf_rows.connect(self._on_cw_wf_rows)        # V8.5.10 : waterfall CW fin
         self.audio_thread.snr_updated.connect(self._on_snr)
         self.audio_thread.envelope_data.connect(self._on_envelope)
         self.audio_thread.raw_audio.connect(self._autopitch_feed_audio)
@@ -35634,6 +35752,15 @@ class PSKMainWindow(QMainWindow):
         Le décodage, le waterfall et l'auto-mode ne sont pas modifiés.
         """
         return
+
+    def _on_cw_wf_rows(self, rows, hz_per_bin, row_ms):
+        """V8.5.10 : lignes fines du fil audio -> fenêtre CW (si ouverte)."""
+        try:
+            win = getattr(self, 'cw_waterfall_window', None)
+            if win is not None and getattr(self, '_family', '') == "CW":
+                win.waterfall.add_rows(rows, hz_per_bin, row_ms)
+        except Exception:
+            pass
 
     def _on_spectrum(self, mag):
         sr = self.audio_thread.sample_rate if self.audio_thread else self._get_rx_sample_rate()
