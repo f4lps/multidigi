@@ -1,5 +1,21 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 3 octobre 2026 — MultiDigi 8.5.12 et CW Terminal 1.9.13 PUBLIÉES (sur accord)
+- MultiDigi v8.5.12 : release id 402582091, 145 544 688 octets, SHA256 `502fbef3…d3b3` identique, `main` = `b6bc922`.
+- CW Terminal v1.9.13 : release id 402578655, 185 852 646 octets, SHA256 `552c1b54…5011` identique (code `0394c10`).
+- GARDE D'ÉMISSION (bloc identique en tête des deux fichiers, entre « F4LPS — GARDE D'ÉMISSION » et « FIN GARDE ») :
+  main() lance un gardien (même exe, `--f4lps-ptt-guard <pid> <état.json>`), qui attend la fin du programme ; fin non
+  propre -> CI-V 17 FF + 1C 00 00, Yaesu TX0; / 88, HRD set button-select TX/MOX/PTT 0, FLRig rig.set_ptt(0), OmniRig
+  Tx=0, lignes DTR/RTS basses. État dans %LOCALAPPDATA%\F4LPS\ptt_guard_<app>_<pid>.json, journal ptt_guard.log.
+  Liaisons : MD = `_md_guard_links` (ptt_on, cw_send_text) ; CWT = `_cwt_guard_refresh` (2 s + ptt_on, port Standard).
+  Tests : test_ptt_guard.py, test_ptt_guard_e2e.py cw|md, test_ptt_guard_exe.py <exe> <app> (exe compilé, OK les deux).
+  OmniRig NON testé (pas de faux OmniRig). Aucun essai sur vraie radio.
+- Cause du plantage 02/10 19:00 (access violation PortAudio, 2 PSKTxThread) : _start_tx refuse si tx_thread tourne ;
+  `_f4lps_lock_pyaudio` (verrou init/open/close/terminate) dans MD et CWT. Test test_md_tx_unique.py.
+- MD : _load_settings s'arrêtait à `_macro_edits` (macros 2..N et identité station non chargées) — corrigé.
+- MD : Yaesu set_frequency vérifié par relecture (`_yaesu_verify_freq`), `_qsy` affiche « la radio n'a pas confirmé ».
+  Point soulevé par ChatGPT (la commande partait bien, mais aucune vérification).
+
 ## ▶▶ 2 octobre 2026 (soir) — MultiDigi 8.5.11 PUBLIÉE (sur accord)
 - Release id 402017775 « latest », `MultiDigi_Setup_8.5.11.exe` 145 516 372 octets, SHA256 `4ac7694d…be2b` identique,
   `main` = `ac75d55` poussé. Exe testé : fenêtre V8.5.11.
