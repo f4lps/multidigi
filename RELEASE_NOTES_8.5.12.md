@@ -20,6 +20,12 @@ au même instant, ce que la bibliothèque audio ne supporte pas.
 - Une deuxième émission est refusée tant que la précédente n'est pas terminée.
 - L'ouverture et la fermeture de la carte son ne se font plus jamais en même temps dans deux parties du programme.
 
+## Yaesu : changement de fréquence vérifié
+Un changement de fréquence (QSY) sur une Yaesu reliée en direct (FT-891, FT-991A, FTDX10… et FT-817/857/897) était
+toujours annoncé réussi, même si la radio n'avait pas pris la commande. Maintenant MultiDigi relit la fréquence de la
+radio, réessaie une fois si besoin, et l'affiche clairement sinon : « ⚠️ QSY 10.1360 MHz : la radio n'a pas confirmé
+(elle indique 7.0740 MHz) ». Le détail est noté dans `multidigi_radio.log`.
+
 ## Correction
 Au démarrage, le chargement des réglages s'interrompait sur les macros (« Chargement réglages PSK impossible ») : seule
 la première macro était relue et l'identité de la station n'était pas mise à jour. Corrigé.

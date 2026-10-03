@@ -28130,11 +28130,28 @@ class RadioController:
             if self.protocol=='icom':
                 self._icom_set_freq(int(freq_hz))
             elif self.protocol=='yaesu_ascii':
-                self._yaesu_ascii_set_freq(int(freq_hz))
+                return self._yaesu_verify_freq(int(freq_hz), self._yaesu_ascii_set_freq, self._yaesu_ascii_get_freq)
             else:
-                self._yaesu_set_freq(int(freq_hz))
+                return self._yaesu_verify_freq(int(freq_hz), self._yaesu_set_freq, self._yaesu_get_freq)
             return True
         except: return False
+
+    def _yaesu_verify_freq(self, freq_hz, setter, getter):
+        """V8.5.12 : Yaesu — envoie la fréquence puis la RELIT ; une 2e tentative si la radio ne l'a pas prise.
+        Avant, set_frequency répondait « réussi » sans savoir si la radio avait accepté la commande."""
+        got = 0
+        for _ in range(2):
+            setter(freq_hz)
+            time.sleep(0.12)
+            got = getter()
+            if got and abs(got - freq_hz) <= 20:           # CAT 5 octets : pas de 10 Hz
+                return True
+        if got:
+            _f4lps_radio_log(f"Yaesu : fréquence {freq_hz} Hz demandée, la radio indique {got} Hz (commande refusée ?)")
+        else:
+            _f4lps_radio_log(f"Yaesu : fréquence {freq_hz} Hz envoyée, la radio ne répond pas à la relecture")
+        self.last_freq_set_read = got
+        return False
 
     def ptt_on(self):
         if not self.connected: return
@@ -41159,10 +41176,17 @@ class PSKMainWindow(QMainWindow):
         dlg.exec_()
 
     def _qsy(self, freq_hz):
-        if self.radio_ctrl.connected: self.radio_ctrl.set_frequency(freq_hz)
+        ok = None
+        if self.radio_ctrl.connected:
+            ok = bool(self.radio_ctrl.set_frequency(freq_hz))
         self._current_freq_hz = freq_hz
         self.freq_display.setText(f"{freq_hz/1e6:.4f}  MHz")
-        self._set_status(f"📻 QSY → {freq_hz/1e6:.4f} MHz")
+        if ok is False:                                    # V8.5.12 : ne plus annoncer un QSY que la radio n'a pas pris
+            got = getattr(self.radio_ctrl, 'last_freq_set_read', 0) or 0
+            self._set_status(f"⚠️ QSY {freq_hz/1e6:.4f} MHz : la radio n'a pas confirmé"
+                             + (f" (elle indique {got/1e6:.4f} MHz)" if got else " (pas de réponse)"))
+        else:
+            self._set_status(f"📻 QSY → {freq_hz/1e6:.4f} MHz")
 
     def _update_preview(self):
         text = self.tx_text.toPlainText()
