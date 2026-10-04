@@ -1,5 +1,12 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 4 octobre 2026 — CW Terminal 1.9.14 PUBLIÉE (sur accord)
+- Release id 402955579 « latest », 185 841 850 octets, SHA256 `44381976…3462` identique (code `5a3b299`, dist_1914).
+- ⚙ Réglages : `_save_my_info` n'écrivait que my_call / my_firstname / my_qth ; my_locator, my_power, auto_call,
+  auto_log restaient en mémoire (perdus au redémarrage, champ locator vide avec l'exemple grisé « JN28TJ »). Corrigé,
+  exemples neutres (AA00AA, Prénom). Test test_cwt_reglages.py. Les OM doivent ressaisir leur locator une fois.
+- Liens de téléchargement donnés : …/releases/latest des deux dépôts.
+
 ## ▶▶ 3 octobre 2026 — MultiDigi 8.5.12 et CW Terminal 1.9.13 PUBLIÉES (sur accord)
 - MultiDigi v8.5.12 : release id 402582091, 145 544 688 octets, SHA256 `502fbef3…d3b3` identique, `main` = `b6bc922`.
 - CW Terminal v1.9.13 : release id 402578655, 185 852 646 octets, SHA256 `552c1b54…5011` identique (code `0394c10`).
