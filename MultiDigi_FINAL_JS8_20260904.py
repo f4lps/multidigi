@@ -287,7 +287,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.12"
+PROGRAM_VERSION_TAG = "8.5.13"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -26299,6 +26299,45 @@ class QSOLogDialog(QDialog):
         v = "" if val is None else str(val)
         return f"<{tag}:{len(v)}>{v}"
 
+    # V8.5.13 : champs de réglage des journaux enregistrés dans les réglages (avant : seuls HRD, QRZ et HamQTH l'étaient ;
+    # eQSL, ClubLog, WaveLog, LoTW, N1MM+, DXLog, Win-Test, WinRef, Log4OM, Log32 revenaient vides à chaque ouverture,
+    # et le log automatique partait donc sans identifiants).
+    _PERSIST_FIELDS = ('eq_user', 'eq_pass', 'eq_nick', 'cl_email', 'cl_pass', 'cl_apikey', 'wl_url', 'wl_apikey',
+                       'lotw_tqsl', 'lotw_station', 'lotw_pass', 'n1mm_ip', 'n1mm_port', 'dxlog_ip', 'dxlog_port',
+                       'wt_ip', 'wt_port', 'wr_ip', 'wr_port', 'l4_ip', 'l4_port', 'l32_ip', 'l32_port')
+
+    def _restore_log_fields(self):
+        st = getattr(self, '_logbook_settings', None)
+        if st is None:
+            return
+        for attr in self._PERSIST_FIELDS:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            v = st.get('f_' + attr)
+            if v not in (None, ''):
+                w.setText(str(v))
+            try:
+                w.editingFinished.connect(self._persist_log_fields)
+            except Exception:
+                pass
+
+    def _collect_log_fields(self):
+        st = self._logbook_settings
+        for attr in self._PERSIST_FIELDS:
+            w = getattr(self, attr, None)
+            if w is not None:
+                st['f_' + attr] = w.text().strip()
+
+    def _persist_log_fields(self):
+        try:
+            self._collect_log_fields()
+            if getattr(self, '_parent', None) is not None:
+                self._parent._logbook_settings = dict(self._logbook_settings)
+                self._parent._save_settings()
+        except Exception:
+            pass
+
     def _make_adif_record(self, call, date_s, time_s, band, mode, mycall,
                           rst_s="", rst_r="", freq_s="", name="",
                           comment="Via MultiDigi by F4LPS", time_off_s=""):
@@ -26415,6 +26454,7 @@ class QSOLogDialog(QDialog):
             self._logbook_settings['hamqth_password'] = self.hamqth_password.text() if hasattr(self, 'hamqth_password') else self._logbook_settings.get('hamqth_password','')
             self._logbook_settings['qrz_xml_user'] = self.qrz_xml_user.text().strip() if hasattr(self, 'qrz_xml_user') else self._logbook_settings.get('qrz_xml_user','')
             self._logbook_settings['qrz_xml_password'] = self.qrz_xml_password.text() if hasattr(self, 'qrz_xml_password') else self._logbook_settings.get('qrz_xml_password','')
+            self._collect_log_fields()                     # V8.5.13
             if self._parent is not None:
                 self._parent._logbook_settings = dict(self._logbook_settings)
                 self._parent._save_settings()
@@ -26546,6 +26586,7 @@ class QSOLogDialog(QDialog):
         tabs.addTab(self._build_qrz_tab(),     "QRZ.com")
         tabs.addTab(self._build_adif_tab(),    "Export ADIF")
         layout.addWidget(tabs)
+        self._restore_log_fields()                         # V8.5.13 : identifiants et adresses des journaux mémorisés
 
         btn_send = QPushButton("🚀 Envoyer les logs cochés")
         btn_send.setStyleSheet("background:#103010; color:#88ff88; border:1px solid #2d6;"
@@ -26839,6 +26880,19 @@ class QSOLogDialog(QDialog):
         btn.setStyleSheet("background:#001a33; color:#44aaff; border:1px solid #003366;")
         btn.clicked.connect(self._send_eqsl); lay.addWidget(btn); lay.addStretch(); return w
 
+    @staticmethod
+    def _eqsl_result(answer):
+        """('ok' | 'dup' | 'err', message) d'après la réponse d'ImportADIF.cfm (« Result: x out of y records added »)."""
+        import re as _re
+        txt = _re.sub(r'<[^>]+>', ' ', str(answer or ''))
+        m = _re.search(r'Result:\s*(\d+)\s+out of\s+(\d+)\s+records? added', txt, _re.I)
+        if m and int(m.group(1)) > 0 and m.group(1) == m.group(2):
+            return 'ok', ''
+        if _re.search(r'Duplicate', txt, _re.I):
+            return 'dup', ''
+        e = _re.search(r'(Error:[^\r\n]*|Warning:[^\r\n]*)', txt, _re.I)
+        return 'err', (e.group(1).strip() if e else (' '.join(txt.split())[:160] or 'réponse vide'))
+
     def _send_eqsl(self):
         try:
             user=self.eq_user.text().strip(); passwd=self.eq_pass.text().strip()
@@ -26851,16 +26905,22 @@ class QSOLogDialog(QDialog):
             if not user or not passwd or not call:
                 self.eq_status.setText("❌ Login, mot de passe et indicatif requis")
                 self.eq_status.setStyleSheet("color:#ff4444; font-size:9pt;"); return
-            adif = self._make_adif_record(call, date_s, time_s, band, mode, mycall, rst_s, rst_r, freq_s)
-            params = {"ADIFData": adif, "MyCallsign": mycall, "Login": user, "Password": passwd}
-            if nick: params["QTHNickname"] = nick
-            url = "https://www.eqsl.cc/qslcard/importADIF.cfm?" + urllib.parse.urlencode(params)
-            req = urllib.request.Request(url, headers={"User-Agent": "PSKTerminal/1.1 F4LPS"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                answer = resp.read().decode("utf-8", errors="replace")
-            ok = "Error" not in answer and "WARNING" not in answer.upper()
-            self.eq_status.setText(("✅ eQSL envoyé" if ok else "⚠️ Vérifier réponse") + f" — {call}")
-            self.eq_status.setStyleSheet("color:#00ff88;" if ok else "color:#ffaa44;")
+            # V8.5.13 : format documenté par eQSL (ImportADIF.cfm) : identifiants dans l'en-tête ADIF (EQSL_USER /
+            # EQSL_PSWD), surnom de QTH dans APP_EQSL_QTH_NICKNAME, envoi en POST. Avant : paramètres « Login » /
+            # « Password » ignorés par eQSL -> « Error: Missing eQSL_User », aucun QSO n'arrivait.
+            rec = self._make_qrz_adif_record(call, date_s, time_s, band, mode, mycall, rst_s, rst_r, freq_s)
+            if nick:
+                rec = rec[:-len('<EOR>')] + self._af('APP_EQSL_QTH_NICKNAME', nick) + '<EOR>'
+            adif = ("MultiDigi " + self._af('ADIF_VER', '3.1.0') + self._af('PROGRAMID', 'MultiDigi')
+                    + self._af('EQSL_USER', user) + self._af('EQSL_PSWD', passwd) + '<EOH>' + rec)
+            answer = self._api_post("https://www.eqsl.cc/qslcard/importADIF.cfm", {"ADIFData": adif},
+                                    user_agent="MultiDigi F4LPS")
+            st, msg = self._eqsl_result(answer)
+            self.eq_status.setText({'ok': "✅ eQSL envoyé", 'dup': "✅ déjà dans eQSL (doublon)",
+                                    'err': "❌ eQSL : " + msg}[st] + f" — {call}")
+            self.eq_status.setStyleSheet({'ok': "color:#00ff88;", 'dup': "color:#88ddff;", 'err': "color:#ff4444;"}[st])
+            if st == 'err':
+                print(f"[LOG eQSL] réponse : {answer[:400]}")
         except Exception as e:
             self.eq_status.setText(f"❌ {e}"); self.eq_status.setStyleSheet("color:#ff4444; font-size:9pt;")
 
