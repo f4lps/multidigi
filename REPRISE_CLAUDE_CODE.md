@@ -1,5 +1,14 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 9 octobre 2026 — MultiDigi 8.5.13 et CW Terminal 1.9.15 PUBLIÉES (sur accord)
+- MultiDigi v8.5.13 : release id 407538144, 145 538 428 octets, SHA256 `fa01adc3…a431` identique, `main` = `bbbb571`.
+- CW Terminal v1.9.15 : release id 407540245, 185 858 856 octets, SHA256 `cc27ce01…dfca` identique (code `bdd9a21`).
+- eQSL n'avait JAMAIS marché (les deux programmes) : paramètres Login/Password -> « Error: Missing eQSL_User ».
+  Maintenant EQSL_USER/EQSL_PSWD dans l'en-tête ADIF + APP_EQSL_QTH_NICKNAME, POST, réponse lue (`_eqsl_result`).
+  Vérifié sur le vrai serveur avec un compte fictif (ancien : Missing eQSL_User ; nouveau : No match).
+- MultiDigi QSOLogDialog : `_PERSIST_FIELDS` (eQSL, ClubLog, WaveLog, LoTW, IP/ports N1MM/DXLog/WT/WR/Log4OM/Log32)
+  relus / enregistrés (clés f_<champ> dans _logbook_settings). Tests test_md_eqsl.py, test_cwt_eqsl.py.
+
 ## ▶▶ 4 octobre 2026 — CW Terminal 1.9.14 PUBLIÉE (sur accord)
 - Release id 402955579 « latest », 185 841 850 octets, SHA256 `44381976…3462` identique (code `5a3b299`, dist_1914).
 - ⚙ Réglages : `_save_my_info` n'écrivait que my_call / my_firstname / my_qth ; my_locator, my_power, auto_call,
