@@ -1,5 +1,11 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 17 octobre 2026 — MultiDigi 8.5.15 PUBLIÉE (sur accord)
+- Release id 415591611, SHA256 `60a55584…c380` identique, `main` = `f88d133`.
+- JS8 : commandes dirigées vers / depuis un indicatif composé (SV2BBO/A…) refusées (« non compactable », 28 bits).
+  Repli `_pack_compound_directed_frames` : COMPOUND (émetteur) + COMPOUND_DIRECTED (destinataire + commande), format
+  JS8Call. Test test_md_js8_compound.py. NON vérifié face à un vrai JS8Call.
+
 ## ▶▶ 17 octobre 2026 — MultiDigi 8.5.14 et CW Terminal 1.9.16 PUBLIÉES (sur accord)
 - MultiDigi v8.5.14 : release id 415578409, SHA256 `a6a37b74…3c7c` identique, `main` = `720bfb1`.
 - CW Terminal v1.9.16 : release id 415578988, SHA256 `bc002ecb…24f7` identique (code `4ce4d20`).
