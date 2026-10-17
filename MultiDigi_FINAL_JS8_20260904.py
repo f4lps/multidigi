@@ -287,7 +287,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.14"
+PROGRAM_VERSION_TAG = "8.5.15"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -24066,6 +24066,31 @@ class JS8TXEncoder:
         return np.asarray(cls._bits((first64 << 8) | extra8, 72), dtype=np.uint8)
 
     @classmethod
+    def _pack_compound_directed_frames(cls, from_call, to_call, command, number=None, grid=""):
+        """V8.5.15 : commande dirigée avec un indicatif composé, au format JS8Call (Varicode::packCompoundFrame) :
+        COMPOUND = émetteur + locator (ou aucun), COMPOUND_DIRECTED = destinataire + nusergrid + commande packée
+        (SNR et HEARTBEAT SNR : bit 7 + numéro sur 6 bits ; autres commandes : index sur 7 bits)."""
+        commands = {name: index for index, name in JS8RXDecoder._v25_directed_commands().items() if name}
+        cmd = " ".join(str(command or "").upper().split())
+        if cmd not in commands:
+            raise ValueError("Commande dirigee JS8 inconnue: " + cmd)
+        idx = commands[cmd]
+        if idx in (25, 29):
+            num6 = 0
+            if number not in (None, ""):
+                num6 = max(-30, min(31, int(number))) + 31
+            packed = (1 << 7) | ((1 << 6) if idx == 29 else 0) | (num6 & 0x3F)
+        else:
+            packed = idx & 0x7F
+        nusergrid = 180 * 180 + 10
+        try:
+            num_from = cls._pack_grid(grid) if grid else 0x7FFF
+        except ValueError:
+            num_from = 0x7FFF
+        return [("STRUCTURED", cls._pack_compound_payload(from_call, 1, num_from)),
+                ("STRUCTURED", cls._pack_compound_payload(to_call, 2, nusergrid + packed))]
+
+    @classmethod
     def _pack_heartbeat_payload(cls, callsign, grid, cq="HB"):
         cq_names = {"CQ CQ CQ":0, "CQ DX":1, "CQ QRP":2, "CQ CONTEST":3,
                     "CQ FIELD":4, "CQ FD":5, "CQ CQ":6, "CQ":7}
@@ -24105,7 +24130,12 @@ class JS8TXEncoder:
         directed = re.fullmatch(r"\[JS8:DIR\s+([^\]]+)\]\s+(\S+)\s+(\S+)(?:\s+([+-]?\d+))?", value, re.I)
         if directed:
             cmd, from_call, to_call, number = directed.groups()
-            return [("STRUCTURED", cls._pack_directed_payload(from_call, to_call, cmd, number))]
+            try:
+                return [("STRUCTURED", cls._pack_directed_payload(from_call, to_call, cmd, number))]
+            except ValueError:
+                # V8.5.15 : indicatif composé (SV2BBO/A, F/DL1ABC…) : il ne tient pas sur 28 bits. Comme JS8Call :
+                # trame COMPOUND (émetteur) puis COMPOUND_DIRECTED (destinataire + commande), indicatifs sur 50 bits.
+                return cls._pack_compound_directed_frames(from_call, to_call, cmd, number)
         return cls._pack_data_chunks(value)
 
     @staticmethod
