@@ -1,5 +1,12 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 17 octobre 2026 — MultiDigi 8.5.14 et CW Terminal 1.9.16 PUBLIÉES (sur accord)
+- MultiDigi v8.5.14 : release id 415578409, SHA256 `a6a37b74…3c7c` identique, `main` = `720bfb1`.
+- CW Terminal v1.9.16 : release id 415578988, SHA256 `bc002ecb…24f7` identique (code `4ce4d20`).
+- Carte du Tracker (MultiDigi `_LEAFLET_HTML`, CW Terminal `cw_tracker.py`) : tuiles OpenStreetMap France
+  (`tile.openstreetmap.fr/osmfr`, noms français), repli automatique sur openstreetmap.org si aucune tuile ne charge.
+- ⚠️ Le script de publication est maintenant dans le scratchpad de session (publish.py) : %TEMP%\pub a été nettoyé.
+
 ## ▶▶ 9 octobre 2026 — MultiDigi 8.5.13 et CW Terminal 1.9.15 PUBLIÉES (sur accord)
 - MultiDigi v8.5.13 : release id 407538144, 145 538 428 octets, SHA256 `fa01adc3…a431` identique, `main` = `bbbb571`.
 - CW Terminal v1.9.15 : release id 407540245, 185 858 856 octets, SHA256 `cc27ce01…dfca` identique (code `bdd9a21`).
