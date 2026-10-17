@@ -287,7 +287,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.13"
+PROGRAM_VERSION_TAG = "8.5.14"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -43894,10 +43894,26 @@ _LEAFLET_HTML = """<!DOCTYPE html>
 <div id="map"></div>
 <script>
   var map = L.map('map', {worldCopyJump:true}).setView([46.6, 2.5], 4);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // Fond de carte avec les noms en français (pays, villes, mers) : OpenStreetMap France. Si ce serveur ne répond
+  // pas (aucune tuile chargée après plusieurs erreurs), retour automatique au fond OpenStreetMap standard.
+  var baseFr = L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
+      subdomains: 'abc', maxZoom: 19,
+      attribution: '&copy; OpenStreetMap France | &copy; OpenStreetMap contributors'
+  });
+  var baseStd = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
       attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
+  });
+  var frLoaded = 0, frErrors = 0;
+  baseFr.on('tileload', function () { frLoaded++; });
+  baseFr.on('tileerror', function () {
+      frErrors++;
+      if (frLoaded === 0 && frErrors >= 6 && map.hasLayer(baseFr)) {
+          map.removeLayer(baseFr);
+          baseStd.addTo(map);
+      }
+  });
+  baseFr.addTo(map);
 
   var markersLayer = L.layerGroup().addTo(map);
   var activityLayer = L.layerGroup().addTo(map);
