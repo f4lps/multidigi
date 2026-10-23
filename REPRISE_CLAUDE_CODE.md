@@ -1,5 +1,16 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 23 octobre 2026 — CW Terminal 1.9.17 et MultiDigi 8.5.16 PUBLIÉES (sur accord)
+- CW Terminal v1.9.17 : release id 421679885, SHA256 `323c118f…e226` identique (code `53bb59c`).
+- MultiDigi v8.5.16 : release id 421680258, SHA256 `e0b8a2d9…34ee9fa` identique, `main` = `b2d637b`.
+- CWT : fréquence du log = `_rx_freq_cached` (FreqPollerThread) au lieu d'un get_frequency() concurrent (0 / faux
+  dans les 13 logbooks). `cw_callbook.valid_call` : structure ITU (S52AL, E73A, A61BK… étaient refusés),
+  base_call EA8/F4XXX -> F4XXX, first_name sans titre / guillemets. Test test_cwt_logfreq_callbook.py.
+- MD : `_f4lps_looks_like_call` / `_f4lps_base_call` dans les 4 contrôles du champ DX.
+- NON fait : l'auto-call de CWT (`is_callsign_pattern`) refuse probablement les préfixes commençant par un chiffre
+  (9A1A, 4X4AA…) — signalé à l'utilisateur, pas modifié.
+- Dossier non suivi `CW_Terminal_Dev/pip/` apparu (pas créé par Claude a priori) : laissé tel quel.
+
 ## ▶▶ 17 octobre 2026 — MultiDigi 8.5.15 PUBLIÉE (sur accord)
 - Release id 415591611, SHA256 `60a55584…c380` identique, `main` = `f88d133`.
 - JS8 : commandes dirigées vers / depuis un indicatif composé (SV2BBO/A…) refusées (« non compactable », 28 bits).
