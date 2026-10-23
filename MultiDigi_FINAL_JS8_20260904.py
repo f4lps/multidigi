@@ -287,7 +287,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.15"
+PROGRAM_VERSION_TAG = "8.5.16"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -27970,6 +27970,25 @@ class _LogSendWorker(QThread):
         self.done.emit(sent, errors, dict(self.snap._logbook_settings))
 
 
+def _f4lps_looks_like_call(call):
+    """V8.5.16 : indicatif plausible (structure ITU). Avant : « lettre + chiffre + lettre » seulement, ce qui refusait
+    S52AL, E73A, Z35T, A61BK, A71BX, T77C… (préfixe finissant par un chiffre)."""
+    b = _f4lps_base_call(call)
+    m = re.fullmatch(r'([A-Z0-9]{1,3}?)([0-9]{1,4})([A-Z]{1,4})', b or '')
+    return bool(re.search(r'[A-Z][0-9][A-Z]', b or '')) or bool(m and re.search(r'[A-Z]', m.group(1)))
+
+
+def _f4lps_base_call(call):
+    """V8.5.16 : indicatif principal, sans préfixe ni suffixe : « EA8/F4XXX » -> « F4XXX », « SV2BBO/A » -> « SV2BBO »
+    (avant : la partie AVANT la barre, « EA8 », était recherchée)."""
+    parts = [p for p in re.sub(r'[^A-Z0-9/]', '', str(call or '').upper()).split('/') if p]
+    full = [p for p in parts if re.fullmatch(r'[A-Z0-9]{1,3}?[0-9]{1,4}[A-Z]{1,4}', p)]
+    for p in sorted(full or parts, key=len, reverse=True):
+        if re.search(r'[A-Z][0-9][A-Z]', p) or re.search(r'[0-9][A-Z]', p):
+            return p
+    return parts[0] if parts else ''
+
+
 def _f4lps_radio_log(msg):
     """Journal ~/multidigi_radio.log (mode radio, CW, PTT, connexion) : à joindre à un rapport de problème."""
     try:
@@ -36423,8 +36442,8 @@ class PSKMainWindow(QMainWindow):
     def _on_dxcall_text_edited(self, text):
         """Mise à jour de _last_dxcall à chaque frappe — pas besoin d'Entrée."""
         call = text.strip().upper()
-        # Accepter dès qu'on a le minimum : lettre+chiffre+lettre
-        if call and re.search(r'[A-Z][0-9][A-Z]', call):
+        # Accepter dès qu'on a un indicatif plausible (V8.5.16 : structure ITU, S52AL / A61BK inclus)
+        if call and _f4lps_looks_like_call(call):
             self._last_dxcall = call
             try: self.detected_call_lbl.setText(f'CALL actif : {call}')
             except: pass
@@ -36448,8 +36467,8 @@ class PSKMainWindow(QMainWindow):
         call = self.dx_call_combo.lineEdit().text().strip().upper()
         if not call:
             return
-        # Validation souple : lettre + chiffre + lettre minimum
-        if re.search(r'[A-Z][0-9][A-Z]', call):
+        # Validation souple (V8.5.16 : structure ITU, S52AL / A61BK inclus)
+        if _f4lps_looks_like_call(call):
             self._set_active_dxcall(call, from_combo=True)
         else:
             self._set_status(f'⚠️ Indicatif non reconnu : {call}')
@@ -36587,8 +36606,8 @@ class PSKMainWindow(QMainWindow):
             call = self.dx_call_combo.lineEdit().text().strip().upper()
         except Exception:
             call = ''
-        base_call = re.sub(r'[^A-Z0-9/]', '', call).split('/')[0]
-        if not base_call or not re.search(r'[A-Z][0-9][A-Z]', base_call):
+        base_call = _f4lps_base_call(call)             # V8.5.16 : « EA8/F4XXX » -> F4XXX (avant : EA8)
+        if not base_call or not _f4lps_looks_like_call(base_call):
             self._set_dx_lookup_state("Indicatif invalide", 'error')
             self._set_status("⚠️ Entrez d'abord un indicatif valide dans CALL")
             return
@@ -36628,7 +36647,7 @@ class PSKMainWindow(QMainWindow):
         except Exception:
             call = str(getattr(self, '_last_dxcall', '') or '').strip().upper()
         call = re.sub(r'[^A-Z0-9/]', '', call)
-        if not call or not re.search(r'[A-Z][0-9][A-Z]', call):
+        if not call or not _f4lps_looks_like_call(call):
             self._set_dx_lookup_state("Indicatif invalide", 'error')
             return
         base_call = call.split('/')[0]
