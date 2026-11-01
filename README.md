@@ -31,6 +31,7 @@ FSK/PSK réels).
 - Tracker intégré avec carte (QSO, callsigns entendus, trafic mondial)
 - Export/import ADIF, intégration HRD, QRZ, eQSL, LoTW, PSK Reporter,
   WSJT-X (UDP)
+- Onglet **SSTV** : fréquences de chaque bande à part des modes numériques, un clic règle le mode et la fréquence
 - Trois thèmes d'interface : **Aluminium usé**, **Carbone**, **Néon**
 - Vérificateur de mise à jour intégré (onglet À propos)
 - **CW FIT** : décodeur CW par ajustement du modèle de timing Morse — bien meilleur sur signaux
@@ -61,6 +62,26 @@ FSK/PSK réels).
    l'installation se fait dans ton dossier utilisateur
    (`%LOCALAPPDATA%\MultiDigi`).
 3. Lance MultiDigi depuis le raccourci créé (Menu Démarrer / Bureau).
+
+### Linux
+
+Sur la page [Releases](../../releases), télécharge `multidigi_X.Y.Z_amd64.deb` (Ubuntu 22.04, Debian 12 ou plus récent,
+64 bits), ou le `.tar.gz` pour les autres distributions. Puis déconnecte-toi et reconnecte-toi après ces deux commandes,
+pour avoir accès aux ports série :
+
+```bash
+sudo apt install ./multidigi_X.Y.Z_amd64.deb
+sudo usermod -aG dialout $USER
+```
+
+### Mac (en essai)
+
+Sur la page [Releases](../../releases), télécharge le `.dmg` `mac-arm64` (Apple Silicon) ou `mac-x86_64` (Intel). Le
+programme n'est pas signé par Apple : au premier lancement, fais clic droit > Ouvrir, puis autorise le micro (c'est lui
+qui donne accès à l'entrée audio de la radio).
+
+Les versions Linux et Mac n'ont pas encore été essayées avec une vraie radio : charge fictive pour les premières
+émissions. Absent hors Windows pour le moment : PSK Reporter et OmniRig ; HRD seulement à travers le réseau.
 
 ### Option alternative — lancer depuis les sources Python
 

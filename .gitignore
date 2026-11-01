@@ -35,3 +35,4 @@ dist-cw-*/
 
 # Paquets Linux
 dist-linux/
+dist-mac/
