@@ -1,5 +1,19 @@
 # Reprise MultiDigi — 7 septembre 2026 (fin de session)
 
+## ▶▶ 1er novembre 2026 — MultiDigi 8.5.17 et CW Terminal 1.9.18 PUBLIÉES (sur accord), Linux et Mac en essai
+- MultiDigi v8.5.17 : release id 430718642, `main` = `bd6579f`. CW Terminal v1.9.18 : release id 430717711 (code `52743e0`,
+  docs `571cb83`). 5 fichiers chacune (.exe, .deb, .tar.gz, 2 .dmg renommés `-essai`), SHA256 tous identiques.
+- Linux : `package-linux.sh md|cw|all` dans WSL en root (Ubuntu 22.04 isolé dans /srv/f4lps-jammy), sortie `dist-linux/`.
+- Mac MultiDigi : branche `mac-build` (GitHub Actions, macos-15 et macos-15-intel), `package-mac.sh`. Mac CW Terminal : dépôt
+  PRIVÉ `f4lps/CW-Terminal-Mac-build`, branche `main`, copie des seuls fichiers utiles, à remettre à jour à la main (le code
+  de CW Terminal ne doit jamais être public). Les journaux et artefacts redirigent : ne pas suivre avec le jeton.
+- Le guide HTML des paquets Linux et Mac 1.9.18 ne contient pas la section Linux/Mac (fabriqués avant sa rédaction).
+- À CORRIGER : la mise à jour prend le premier `.dmg` de la liste (`_f4lps_update_exts`), donc `arm64` même sur un Mac Intel.
+  Choisir selon `platform.machine()` dans les deux programmes.
+- NON testé : vraie radio, vraie carte son Linux, vrai Mac avec écran (essai F1BDD à venir), affichage du waterfall CW
+  Terminal sur Mac (useOpenGL=True sans PyOpenGL). Essai .deb : 20 s sans écran dans WSL. Essai Mac : 25 s sans écran.
+- `test_md_cwmode` et `test_md_connect` passent une fois Win4IcomSuite fermé.
+
 ## ▶▶ 23 octobre 2026 — CW Terminal 1.9.17 et MultiDigi 8.5.16 PUBLIÉES (sur accord)
 - CW Terminal v1.9.17 : release id 421679885, SHA256 `323c118f…e226` identique (code `53bb59c`).
 - MultiDigi v8.5.16 : release id 421680258, SHA256 `e0b8a2d9…34ee9fa` identique, `main` = `b2d637b`.
