@@ -13,7 +13,10 @@ _PG_FLAG = '--f4lps-ptt-guard'
 
 
 def _pg_dir():
-    d = _pg_os.path.join(_pg_os.environ.get('LOCALAPPDATA') or _pg_os.path.expanduser('~'), 'F4LPS')
+    home = _pg_os.path.expanduser('~')
+    base = _pg_os.environ.get('LOCALAPPDATA') or (_pg_os.path.join(home, 'Library', 'Application Support')
+                                                  if _pg_sys.platform == 'darwin' else _pg_os.path.join(home, '.local', 'share'))
+    d = _pg_os.path.join(base, 'F4LPS')
     try:
         _pg_os.makedirs(d, exist_ok=True)
     except Exception:
@@ -121,17 +124,32 @@ def _pg_guard_main(argv):
         pid, state_path = int(argv[0]), argv[1]
     except Exception:
         return
-    try:
-        import ctypes
-        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        k32.OpenProcess.restype = ctypes.c_void_p
-        h = k32.OpenProcess(0x00100000, False, pid)       # SYNCHRONIZE
-        if not h:
+    if _pg_os.name == 'nt':
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            k32.OpenProcess.restype = ctypes.c_void_p
+            h = k32.OpenProcess(0x00100000, False, pid)   # SYNCHRONIZE
+            if not h:
+                return
+            k32.WaitForSingleObject(ctypes.c_void_p(h), 0xFFFFFFFF)
+            k32.CloseHandle(ctypes.c_void_p(h))
+        except Exception:
             return
-        k32.WaitForSingleObject(ctypes.c_void_p(h), 0xFFFFFFFF)
-        k32.CloseHandle(ctypes.c_void_p(h))
-    except Exception:
-        return
+    else:
+        # Linux / macOS : le programme garde ouvert un tube vers le gardien. Quand il meurt, de quelque façon que ce soit,
+        # le système ferme le tube et cette lecture se termine (argv[2] = descripteur). Modules chargés avant l'attente :
+        # le programme peut disparaître avec son dossier monté.
+        try:
+            import serial, socket, struct, xmlrpc.client   # noqa: F401,E401
+        except Exception:
+            pass
+        try:
+            fd = int(argv[2])
+            while _pg_os.read(fd, 64):
+                pass
+        except Exception:
+            return
     try:
         with open(state_path, encoding='utf-8') as f:
             st = json.load(f)
@@ -187,7 +205,13 @@ class _PttGuard:
                 w = _pg_os.path.join(_pg_os.path.dirname(exe), 'pythonw.exe')
                 cmd = [w if _pg_os.path.exists(w) else exe, _pg_os.path.abspath(_pg_sys.argv[0]),
                        _PG_FLAG, str(_pg_os.getpid()), self.path]
-            self._proc = subprocess.Popen(cmd, close_fds=True, creationflags=0x08000000 | 0x00000200)  # sans fenêtre
+            if _pg_os.name == 'nt':
+                self._proc = subprocess.Popen(cmd, close_fds=True, creationflags=0x08000000 | 0x00000200)  # sans fenêtre
+            else:
+                r, self._pipe_w = _pg_os.pipe()            # voir _pg_guard_main : gardé ouvert jusqu'à la mort du programme
+                self._proc = subprocess.Popen(cmd + [str(r)], close_fds=True, pass_fds=(r,), start_new_session=True,
+                                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _pg_os.close(r)
         except Exception as e:
             _pg_log(f"{self.app} : garde d'émission non lancée ({e})")
         self._install_hooks()
@@ -251,9 +275,25 @@ _PTT_GUARD = None
 def _pg_start(app):
     """À appeler une fois dans main(). Les tests (sans main()) n'ont pas de garde : les fonctions ci-dessous ne font rien."""
     global _PTT_GUARD
-    if _PTT_GUARD is None and _pg_os.name == 'nt':
+    if _PTT_GUARD is None:
         _PTT_GUARD = _PttGuard(app).start()
     return _PTT_GUARD
+
+
+def _f4lps_open_path(path):
+    """Ouvre un fichier avec le programme associé (Windows, macOS, Linux)."""
+    if _pg_os.name == 'nt':
+        _pg_os.startfile(path)
+    else:
+        import subprocess
+        subprocess.Popen(['open' if _pg_sys.platform == 'darwin' else 'xdg-open', str(path)])
+
+
+def _f4lps_update_exts():
+    """Types d'installeur proposés par la mise à jour, selon le système."""
+    if _pg_os.name == 'nt':
+        return ('.exe',)
+    return ('.dmg',) if _pg_sys.platform == 'darwin' else ('.deb', '.tar.gz')
 
 
 def _pg_tx(on):
@@ -287,7 +327,7 @@ DEFAULT_INFO_TEXT = ""
 # dernière release GitHub (ex: "8.3.14" contre release "v8.4.0").
 # Dépôt GitHub F4LPS/MultiDigi — tant qu'aucune release n'y existe encore,
 # la vérification échoue simplement en silence (404) sans gêner l'utilisateur.
-PROGRAM_VERSION_TAG = "8.5.16"
+PROGRAM_VERSION_TAG = "8.5.17"
 UPDATE_GITHUB_REPO = "F4LPS/MultiDigi"
 UPDATE_CHECK_API_URL = f"https://api.github.com/repos/{UPDATE_GITHUB_REPO}/releases/latest"
 #!/usr/bin/env python3
@@ -907,7 +947,23 @@ BAND_COLORS = {
     "12m": ("#001a2a","#44ffff"),
     "10m": ("#1a002a","#aa44ff"),
     "6m": ("#250020","#ff66ff"),
+    "2m": ("#002025","#66eeff"),
 }
+
+# V8.5.17 : fréquences SSTV, À PART des modes numériques (onglet « 📺 SSTV »). Usage : LSB sous 10 MHz, USB au-dessus,
+# FM sur 2 m. (fréquence Hz, bande, mode, libellé du bouton, remarque)
+SSTV_FREQUENCIES = [
+    (3730000,   "80m", "LSB", "3.730\n80m LSB",    "Europe"),
+    (3845000,   "80m", "LSB", "3.845\n80m LSB",    "Amériques"),
+    (7165000,   "40m", "LSB", "7.165\n40m LSB",    "Europe"),
+    (7171000,   "40m", "LSB", "7.171\n40m LSB",    "international"),
+    (14230000,  "20m", "USB", "14.230\n20m USB",   "fréquence principale"),
+    (14233000,  "20m", "USB", "14.233\n20m USB",   "dégagement"),
+    (21340000,  "15m", "USB", "21.340\n15m USB",   ""),
+    (28680000,  "10m", "USB", "28.680\n10m USB",   ""),
+    (144500000, "2m",  "FM",  "144.500\n2m FM",    "IARU Région 1"),
+    (145800000, "2m",  "FM",  "145.800\n2m FM ISS", "ISS (écoute)"),
+]
 
 # Fréquences d'appel JS8Call.
 # La liste principale provient du guide JS8Call ; 160m et 60m tiennent compte
@@ -26120,7 +26176,7 @@ class UpdateCheckThread(QThread):
             asset_name = ''
             for a in assets:
                 name = str(a.get('name', ''))
-                if name.lower().endswith(('.py', '.exe', '.zip')):
+                if name.lower().endswith(('.py', '.exe', '.zip') if os.name == 'nt' else _f4lps_update_exts()):
                     asset_url = str(a.get('browser_download_url', '') or '')
                     asset_name = name
                     break
@@ -28664,6 +28720,39 @@ class RadioController:
             pass
         return False
 
+    def set_mode_named(self, name):
+        """V8.5.17 : passe la radio en LSB, USB ou FM (onglet SSTV) via la connexion CAT active. Yaesu récente : modes DATA
+        (audio par la prise USB de la radio, comme les autres modes numériques) et vérifiés par relecture."""
+        name = str(name or '').upper()
+        if not self.connected or name not in ('LSB', 'USB', 'FM'):
+            return False
+        try:
+            if self.connection_type == 'omnirig' and self.rig:
+                # OmniRig RigParamX : PM_SSB_L = 0x04000000, PM_SSB_U = 0x02000000, PM_FM = 0x40000000.
+                self.rig.Mode = {'LSB': 0x04000000, 'USB': 0x02000000, 'FM': 0x40000000}[name]
+                return True
+            if self.connection_type == 'hrd':
+                c = getattr(self, '_hrd_client', None)
+                return bool(c and c.send_simple_command(f'set mode {name}'))
+            if self.connection_type == 'flrig':
+                self._flrig_call('rig.set_mode', args=(name,))
+                return True
+            if self.protocol == 'icom':
+                # CI-V 06 : 00 = LSB, 01 = USB, 05 = FM.
+                with self._lock:
+                    self.serial_port.write(bytes([0xFE, 0xFE, self.civ_address, 0xE0, 0x06,
+                                                  {'LSB': 0x00, 'USB': 0x01, 'FM': 0x05}[name], 0xFD]))
+                return True
+            if self.protocol == 'yaesu_ascii':
+                return self.yaesu_set_mode(name)
+            # CAT Yaesu 5 octets (FT-817/857/897) : commande 07, mode 00 = LSB, 01 = USB, 08 = FM.
+            with self._lock:
+                self.serial_port.write(bytes([{'LSB': 0x00, 'USB': 0x01, 'FM': 0x08}[name], 0, 0, 0, 0x07]))
+            return True
+        except Exception as e:
+            _f4lps_radio_log(f"Mode {name} : erreur {type(e).__name__}: {e}")
+        return False
+
     def set_mode_cw(self):
         """Passe la radio en CW via la connexion CAT active."""
         if not self.connected:
@@ -28934,7 +29023,7 @@ class RadioController:
     def yaesu_set_mode(self, want):
         """Change le mode d'une Yaesu récente et le VÉRIFIE par relecture. want='USB' -> DATA-USB (audio par le port USB de
         la radio) ; want='CW' -> CW. Retourne True seulement si la radio confirme."""
-        ch = {'USB': 'C', 'CW': '3'}[want]
+        ch = {'USB': 'C', 'CW': '3', 'LSB': '8', 'FM': 'A'}[want]   # V8.5.17 : LSB = DATA-LSB, FM = DATA-FM (audio USB)
         for _ in range(3):
             with self._lock:
                 self.serial_port.write(f"MD0{ch};".encode('ascii'))
@@ -32677,6 +32766,7 @@ class PSKMainWindow(QMainWindow):
         tabs.addTab(self._build_tx_tab(),    "📤 ÉMISSION")
         tabs.addTab(self._build_macros_tab(),"🔠 MACROS F1-F10")
         tabs.addTab(self._build_log_tab2(),  "📋 LOG QSO")
+        tabs.addTab(self._build_sstv_tab(),  "📺 SSTV")          # V8.5.17 : fréquences SSTV, à part
         # V1.6.94 : RADIO CAT déplacé dans Réglages généraux.
         self._radio_cat_tab_idx = -1
         tabs.addTab(self._build_prop_tab(),  "☀️ PROPAGATION")
@@ -33362,6 +33452,9 @@ class PSKMainWindow(QMainWindow):
         # ── GROUPE PSK REPORTER ──────────────────────────────────────────────
         pskr = getattr(self,'_psk_reporter_settings',{}) or {}
         pskr_en   = QCheckBox("Activer l'annonce PSK Reporter / spotting"); pskr_en.setChecked(bool(pskr.get('enabled',False)))
+        if _pg_os.name != 'nt':                                # V8.5.17 : DLL Windows, indisponible sur Linux et macOS
+            pskr_en.setChecked(False); pskr_en.setEnabled(False)
+            pskr_en.setToolTip("PSK Reporter n'est pas disponible sur ce système pour le moment (Windows seulement)")
         pskr_call = _ed(pskr.get('callsign', _val('mycall_edit','F4LPS')))
         pskr_loc  = _ed(pskr.get('locator',  _val('locator_edit','JN28TJ')))
         pskr_ant  = _ed(pskr.get('antenna',  _val('antenna_edit','')))
@@ -34321,6 +34414,62 @@ class PSKMainWindow(QMainWindow):
                 )
             self._freq_grid.addWidget(btn, i // cols, i % cols)
 
+
+    def _build_sstv_tab(self):
+        """V8.5.17 : fréquences SSTV de chaque bande, à part des modes numériques. Clic = mode (LSB / USB / FM) + fréquence."""
+        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(8, 6, 8, 6); lay.setSpacing(6)
+        hdr = QLabel("📺 FRÉQUENCES SSTV — clic = la radio passe sur la fréquence et dans le bon mode "
+                     "(LSB sous 10 MHz, USB au-dessus, FM sur 2 m). Décodage / émission des images : MMSSTV.")
+        hdr.setWordWrap(True)
+        hdr.setStyleSheet("color:#ff8844;font-weight:bold;font-size:9pt;")
+        lay.addWidget(hdr)
+        grid = QGridLayout(); grid.setSpacing(6)
+        for i, (freq_hz, band, mode, label, note) in enumerate(SSTV_FREQUENCIES):
+            bg, fg = BAND_COLORS.get(band, ("#1a0a00", "#ff8844"))
+            btn = QPushButton(label)
+            btn.setMinimumHeight(48)
+            btn.setMinimumWidth(95)
+            btn.setToolTip(f"{freq_hz/1e6:.3f} MHz — {band} — {mode}" + (f" — {note}" if note else ""))
+            btn.setStyleSheet(
+                f"QPushButton{{background:{bg};color:{fg};font-weight:bold;font-size:8pt;"
+                f"border:1px solid {fg};border-radius:4px;}}"
+                f"QPushButton:hover{{background:{fg};color:#000;}}")
+            btn.clicked.connect(lambda _c=False, f=freq_hz, m=mode, b=band: self._qsy_sstv(f, m, b))
+            grid.addWidget(btn, i // 5, i % 5)
+        lay.addLayout(grid)
+        row = QHBoxLayout()
+        self.sstv_status = QLabel("")
+        self.sstv_status.setStyleSheet("color:#88ccff;font-size:9pt;")
+        row.addWidget(self.sstv_status, 1)
+        btn_mm = QPushButton("🖼️ Lancer MMSSTV")
+        btn_mm.setToolTip("Ouvre MMSSTV (s'il est installé) pour recevoir et envoyer les images")
+        btn_mm.clicked.connect(lambda: _launch_external("MMSSTV.exe"))
+        row.addWidget(btn_mm)
+        lay.addLayout(row)
+        lay.addStretch(1)
+        return w
+
+    def _qsy_sstv(self, freq_hz, mode, band=""):
+        """V8.5.17 : mode SSTV (LSB / USB / FM) puis fréquence. Sans radio connectée : fréquence affichée seulement."""
+        rc = getattr(self, "radio_ctrl", None)
+        mode_ok = None
+        if rc is not None and bool(getattr(rc, "connected", False)):
+            try:
+                mode_ok = bool(rc.set_mode_named(mode))
+            except Exception:
+                mode_ok = False
+        self._qsy(int(freq_hz))
+        txt = f"📺 SSTV {freq_hz/1e6:.3f} MHz {mode}" + (f" ({band})" if band else "")
+        if mode_ok is None:
+            txt += " — radio non connectée : fréquence affichée seulement"
+        elif not mode_ok:
+            txt += f" — ⚠️ la radio n'a pas confirmé le mode {mode} : vérifie-le sur le poste"
+        try:
+            self.sstv_status.setText(txt)
+        except Exception:
+            pass
+        self._set_status(txt)
+        _f4lps_radio_log(txt)
 
     def _build_macros_tab(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setAlignment(Qt.AlignCenter)
@@ -36049,7 +36198,7 @@ class PSKMainWindow(QMainWindow):
             if not os.path.exists(path):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write("Journal diagnostic RX PSK F4LPS\n")
-            os.startfile(path)
+            _f4lps_open_path(path)
         except Exception as e:
             self._set_status(f"⚠ Journal diagnostic : {e}")
 
@@ -42679,6 +42828,9 @@ class PSKMainWindow(QMainWindow):
             return False
         try:
             import ctypes, os
+            if os.name != 'nt':                                # V8.5.17 : l'API PSK Reporter est une DLL Windows
+                self._pskr_last_error = "PSK Reporter n'est pas disponible sur ce système pour le moment (Windows seulement)."
+                return False
             dll = getattr(self, '_pskr_dll', None)
             if dll is None:
                 names = []

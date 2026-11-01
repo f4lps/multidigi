@@ -32,3 +32,6 @@ JS8_JSC_MAP_V303.json.gz
 cw_comparison/
 build-cw-*/
 dist-cw-*/
+
+# Paquets Linux
+dist-linux/
