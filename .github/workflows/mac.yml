@@ -1,0 +1,30 @@
+name: Mac
+on:
+  push:
+    branches: [mac-build]
+  workflow_dispatch:
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Modules
+        run: |
+          brew install portaudio
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller PyQt5 PyQtWebEngine numpy scipy pyaudio pyserial requests deep-translator SpeechRecognition
+      - name: Fabrication
+        run: |
+          V=$(grep -m1 '^PROGRAM_VERSION_TAG' MultiDigi_FINAL_JS8_20260904.py | cut -d'"' -f2)
+          bash package-mac.sh MultiDigi MultiDigi_FINAL_JS8_20260904.py "$V"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MultiDigi-${{ matrix.os }}
+          path: dist-mac/*.dmg
